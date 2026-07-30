@@ -1,0 +1,37 @@
+[Unit]
+Description=Deggio Infra MCP Server
+Documentation=https://github.com/DaniDeggio/ProxmoxMcp
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=deggio-mcp
+Group=deggio-mcp
+WorkingDirectory=/opt/deggio-infra-mcp
+EnvironmentFile=/opt/deggio-infra-mcp/.env
+Environment=DEGGIO_INFRA_CONFIG=/opt/deggio-infra-mcp/config/config.yaml
+
+# Run from the virtual environment
+ExecStart=/opt/deggio-infra-mcp/.venv/bin/deggio-infra-mcp
+
+# Restart policy
+Restart=on-failure
+RestartSec=10
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+# Security hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/opt/deggio-infra-mcp/state
+PrivateTmp=yes
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=deggio-infra-mcp
+
+[Install]
+WantedBy=multi-user.target

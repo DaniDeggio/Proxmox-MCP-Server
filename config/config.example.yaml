@@ -1,0 +1,95 @@
+# =============================================================================
+# Deggio Infra MCP — Configuration
+# =============================================================================
+# Copy this file to config/config.yaml and fill in your values.
+# Secrets should be set via environment variables (see .env.example).
+
+# --- Proxmox VE connection ---
+proxmox:
+  host: "192.168.1.100"
+  port: 8006
+  verify_ssl: false
+  node: "pve"
+  # Token auth — set secrets via env vars
+  token_id: "${PROXMOX_TOKEN_ID}"
+  token_secret: "${PROXMOX_TOKEN_SECRET}"
+  # SSH access for container command execution (optional)
+  ssh:
+    host: "192.168.1.100"
+    port: 22
+    user: "root"
+    # key_file: "~/.ssh/id_ed25519"
+
+# --- LXC templates ---
+templates:
+  base:
+    source_vmid: 9000
+    description: "Base Debian service template"
+    tags: ["base", "debian"]
+    default_cores: 2
+    default_memory_mb: 2048
+    default_disk_gb: 20
+    storage: "local-lvm"
+  gpu:
+    source_vmid: 9001
+    description: "GPU-enabled template with NVIDIA passthrough"
+    tags: ["gpu", "nvidia"]
+    default_cores: 4
+    default_memory_mb: 8192
+    default_disk_gb: 50
+    storage: "local-lvm"
+  gpu_docker:
+    source_vmid: 9002
+    description: "GPU + Docker template for containerized workloads"
+    tags: ["gpu", "docker", "nvidia"]
+    default_cores: 4
+    default_memory_mb: 8192
+    default_disk_gb: 80
+    storage: "local-lvm"
+
+# --- Network / IPAM ---
+network:
+  bridge: "vmbr0"
+  gateway: "192.168.1.1"
+  cidr: 24
+  ip_range_start: "192.168.1.200"
+  ip_range_end: "192.168.1.250"
+  nameserver: "192.168.1.53"
+  state_file: "state/ip_reservations.json"
+
+# --- Pi-hole local DNS ---
+pihole:
+  url: "http://192.168.1.53"
+  password: "${PIHOLE_PASSWORD}"
+  verify_ssl: false
+
+# --- Nginx Proxy Manager ---
+npm:
+  url: "http://192.168.1.80:81"
+  username: "${NPM_USER}"
+  password: "${NPM_PASSWORD}"
+  verify_ssl: false
+  defaults:
+    access_list_id: 0
+    certificate_id: 0
+    ssl_forced: false
+    allow_websocket_upgrade: true
+    block_exploits: true
+    http2_support: false
+
+# --- Domain settings ---
+domains:
+  local_suffix: "deggio.local"
+
+# --- Agy bootstrap ---
+agy:
+  command: "agy"
+  default_user: "root"
+  timeout_seconds: 600
+  # working_dir will default to /root if not specified
+
+# --- App settings ---
+app:
+  log_level: "INFO"
+  log_format: "console"  # "console" or "json"
+  state_dir: "state"

@@ -1,0 +1,84 @@
+"""Domain-specific exceptions for deggio_infra_mcp.
+
+Each exception maps to a clear failure domain so callers can handle
+errors precisely without catching overly broad exception types.
+"""
+
+from __future__ import annotations
+
+
+class DeggioInfraError(Exception):
+    """Base exception for all deggio_infra_mcp errors."""
+
+    def __init__(self, message: str, *, details: dict | None = None) -> None:
+        super().__init__(message)
+        self.details = details or {}
+
+
+class ConfigError(DeggioInfraError):
+    """Configuration loading or validation failure."""
+
+
+class ProxmoxOperationError(DeggioInfraError):
+    """A Proxmox API call failed."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        vmid: int | None = None,
+        operation: str | None = None,
+        details: dict | None = None,
+    ) -> None:
+        super().__init__(message, details=details)
+        self.vmid = vmid
+        self.operation = operation
+
+
+class IpAllocationError(DeggioInfraError):
+    """IP allocation or release failed (exhausted range, conflict, etc.)."""
+
+
+class PiHoleError(DeggioInfraError):
+    """Pi-hole API call failed."""
+
+
+class NpmError(DeggioInfraError):
+    """Nginx Proxy Manager API call failed."""
+
+
+class AgyExecutionError(DeggioInfraError):
+    """Agy bootstrap execution failed inside a container."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        vmid: int | None = None,
+        exit_code: int | None = None,
+        details: dict | None = None,
+    ) -> None:
+        super().__init__(message, details=details)
+        self.vmid = vmid
+        self.exit_code = exit_code
+
+
+class ServiceProvisioningError(DeggioInfraError):
+    """The create_service orchestration flow failed.
+
+    Carries partial results so the caller can inspect what succeeded.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        failed_step: str | None = None,
+        completed_steps: list[str] | None = None,
+        partial_result: dict | None = None,
+        details: dict | None = None,
+    ) -> None:
+        super().__init__(message, details=details)
+        self.failed_step = failed_step
+        self.completed_steps = completed_steps or []
+        self.partial_result = partial_result or {}
