@@ -11,13 +11,13 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING
 
-from deggio_infra_mcp.models.service import ServiceRequest, ServiceType
-from deggio_infra_mcp.services.prompt_generator import generate_agy_prompt
+from proxmox_mcp_server.models.service import ServiceRequest, ServiceType
+from proxmox_mcp_server.services.prompt_generator import generate_agy_prompt
 
 if TYPE_CHECKING:
     from fastmcp import FastMCP
 
-    from deggio_infra_mcp.services.provisioning import ProvisioningService
+    from proxmox_mcp_server.services.provisioning import ProvisioningService
 
 
 def register_tools(mcp: FastMCP, service: ProvisioningService) -> None:
@@ -186,7 +186,7 @@ def register_tools(mcp: FastMCP, service: ProvisioningService) -> None:
         without modification.
 
         Args:
-            domain: The domain name (e.g. 'myservice.deggio.local').
+            domain: The domain name (e.g. 'myservice.homelab.local').
             target_ip: The IP address to point the domain to.
 
         Returns a JSON object with domain, ip, and action taken.

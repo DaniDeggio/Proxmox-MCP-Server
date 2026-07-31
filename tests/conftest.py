@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
-from deggio_infra_mcp.config import (
+from proxmox_mcp_server.config import (
     AgyConfig,
     AppConfig,
     AppSettings,
@@ -18,16 +18,16 @@ from deggio_infra_mcp.config import (
     SshConfig,
     TemplatesConfig,
 )
-from deggio_infra_mcp.models.service import CommandResult
-from deggio_infra_mcp.models.templates import TemplateInfo
-from deggio_infra_mcp.providers import (
-    BaseAgyProvider,
+from proxmox_mcp_server.models.service import CommandResult
+from proxmox_mcp_server.models.templates import TemplateInfo
+from proxmox_mcp_server.providers import (
+    BaseAgentProvider,
     BaseNpmProvider,
     BasePiHoleProvider,
     BaseProxmoxProvider,
 )
-from deggio_infra_mcp.services.ipam import IpamService
-from deggio_infra_mcp.services.provisioning import ProvisioningService
+from proxmox_mcp_server.services.ipam import IpamService
+from proxmox_mcp_server.services.provisioning import ProvisioningService
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -151,7 +151,7 @@ class MockNpmProvider(BaseNpmProvider):
         self.hosts = [h for h in self.hosts if h.get("id") != host_id]
 
 
-class MockAgyProvider(BaseAgyProvider):
+class MockAgyProvider(BaseAgentProvider):
     """In-memory mock for Agy."""
 
     async def run_bootstrap(
@@ -240,7 +240,7 @@ def test_config(
         network=test_network_config,
         pihole=PiHoleConfig(url="http://192.168.1.53", password="test"),
         npm=NpmConfig(url="http://192.168.1.80:81", username="admin@test.com", password="test"),
-        domains=DomainsConfig(local_suffix="deggio.local"),
+        domains=DomainsConfig(local_suffix="homelab.local"),
         agy=AgyConfig(command="agy"),
         app=AppSettings(log_level="DEBUG", state_dir=str(tmp_state_dir)),
     )

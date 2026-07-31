@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import socket
 
-from deggio_infra_mcp.logging import get_logger
+from proxmox_mcp_server.logging import get_logger
 
 log = get_logger("utils.network")
 

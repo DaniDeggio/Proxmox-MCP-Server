@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from deggio_infra_mcp.services.prompt_generator import generate_agy_prompt
+from proxmox_mcp_server.services.prompt_generator import generate_agy_prompt
 
 
 class TestPromptGeneration:

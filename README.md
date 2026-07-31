@@ -1,14 +1,14 @@
-# Deggio Infra MCP
+# Proxmox MCP Server
 
 > Homelab infrastructure provisioning MCP server for automated service deployment on Proxmox LXC containers.
 
-**deggio-infra-mcp** is a production-ready [Model Context Protocol](https://modelcontextprotocol.io/) (MCP) server that orchestrates end-to-end service provisioning in a Proxmox-based homelab. It combines:
+**proxmox-mcp-server** is a production-ready [Model Context Protocol](https://modelcontextprotocol.io/) (MCP) server that orchestrates end-to-end service provisioning in a Proxmox-based homelab. It combines:
 
-- **Proxmox LXC management** — clone templates, configure, start containers
-- **Pi-hole DNS automation** — automatic local DNS record creation
+- **Proxmox LXC management** — clone templates, configure networking & tags, start/stop containers
+- **Pi-hole DNS automation** — automatic local DNS record creation and management
 - **Nginx Proxy Manager** — automated reverse proxy host setup
-- **Agy bootstrap** — AI-driven service setup inside containers
-- **Full orchestration** — one `create_service` tool that does everything
+- **Coding Agent Bootstrap (Agy)** — AI-driven service setup inside containers using Google Antigravity CLI
+- **Full orchestration** — one `create_service` tool that handles the entire pipeline
 
 ## Architecture
 
@@ -27,10 +27,10 @@
 │  services/prompt_generator.py               │
 ├─────────────────────────────────────────────┤
 │          Provider Layer (adapters)          │
-│  providers/proxmox.py  → proxmoxer         │
-│  providers/pihole.py   → Pi-hole v6 API    │
-│  providers/npm.py      → NPM REST API      │
-│  providers/agy.py      → exec via Proxmox  │
+│  providers/proxmox.py  → proxmoxer          │
+│  providers/pihole.py   → Pi-hole v6 API     │
+│  providers/npm.py      → NPM REST API       │
+│  providers/agy.py      → exec via Proxmox   │
 ├─────────────────────────────────────────────┤
 │    Config + Models + State + Logging        │
 │  config.py · models/ · utils/ · logging.py  │
@@ -43,6 +43,7 @@
 - Configuration-driven — everything is in YAML, secrets in env vars
 - Idempotent operations where possible
 - Structured logging with correlation IDs per request
+- Session retry logic (401 token refresh) for long-running MCP servers
 
 ## Repository Structure
 
@@ -52,10 +53,10 @@
 ├── config/
 │   └── config.example.yaml           # Full configuration template
 ├── deploy/
-│   └── deggio-infra-mcp.service      # Systemd unit for LXC deployment
+│   └── proxmox-mcp-server.service    # Systemd unit for LXC deployment
 ├── scripts/
 │   └── run_dev.sh                    # Dev startup script
-├── src/deggio_infra_mcp/
+├── src/proxmox_mcp_server/
 │   ├── __init__.py
 │   ├── server.py                     # FastMCP server entry point
 │   ├── config.py                     # YAML config + env var interpolation
@@ -67,9 +68,9 @@
 │   ├── providers/
 │   │   ├── __init__.py               # Abstract base classes
 │   │   ├── proxmox.py                # Proxmox via proxmoxer
-│   │   ├── pihole.py                 # Pi-hole v6 REST API
-│   │   ├── npm.py                    # Nginx Proxy Manager API
-│   │   └── agy.py                    # Agy execution via SSH
+│   │   ├── pihole.py                 # Pi-hole v6 REST API (with 401 retry)
+│   │   ├── npm.py                    # Nginx Proxy Manager API (with 401 retry)
+│   │   └── agy.py                    # Agy execution via Proxmox
 │   ├── services/
 │   │   ├── ipam.py                   # IP address management
 │   │   ├── provisioning.py           # Orchestration engine
@@ -85,7 +86,10 @@
     ├── test_provisioning.py
     ├── test_prompt_generator.py
     ├── test_npm_provider.py
-    └── test_pihole_provider.py
+    ├── test_npm_http.py
+    ├── test_pihole_provider.py
+    ├── test_pihole_http.py
+    └── test_agy_provider.py
 ```
 
 ## Prerequisites
@@ -129,9 +133,10 @@ cp config/config.example.yaml config/config.yaml
 
 Edit `config/config.yaml` with your environment details:
 - Proxmox host, port, and node name
-- Template VMIDs
+- Template VMIDs and network bridge
 - IP range for new containers
 - Pi-hole and NPM URLs
+- Domain suffix (`homelab.local` by default)
 
 ### 2. Set environment variables
 
@@ -148,6 +153,8 @@ Fill in the secrets:
 | `PIHOLE_PASSWORD` | Pi-hole admin password |
 | `NPM_USER` | Nginx Proxy Manager email |
 | `NPM_PASSWORD` | Nginx Proxy Manager password |
+| `PROXMOX_MCP_CONFIG` | Optional config file path override (default: `config/config.yaml`) |
+| `PROXMOX_MCP_LOG_LEVEL` | Optional log level override (default: `INFO`) |
 
 ### 3. Proxmox API token
 
@@ -162,18 +169,24 @@ pveum user token add mcp@pam mcp-token --privsep=0
 
 Save the token ID and secret in your `.env` file.
 
-## ProxmoxMCP-Plus Integration
+## Coding Agent Integration (Agy)
 
-This project does **not** import ProxmoxMCP-Plus as a library. After inspecting its source, its internal modules are tightly coupled to their own config/MCP transport and are not designed for library use.
+This server supports automated in-container service setup using **[Agy](https://antigravity.google/docs/cli/getting-started)**, the CLI coding agent from Google Antigravity.
 
-Instead, we use **[proxmoxer](https://github.com/proxmoxer/proxmoxer)** directly — the same underlying Proxmox API library that ProxmoxMCP-Plus wraps. This gives us:
+### Installing Agy in Templates
+To allow Agy to bootstrap services automatically inside cloned LXC containers, install it in your base LXC template:
+```bash
+# Inside the LXC template
+curl -fsSL https://antigravity.google/cli/install.sh | bash
+```
 
-- Identical Proxmox API capabilities
-- Zero version coupling to ProxmoxMCP-Plus internals
-- Clean provider abstraction behind `ProxmoxProvider`
-- Full compatibility if you also run ProxmoxMCP-Plus as a separate MCP server
+### Headless Execution
+When `create_service` runs an Agy bootstrap step, it executes Agy in headless/print mode. By default, `skip_permissions: true` is enabled in `config/config.yaml`, which passes `--dangerously-skip-permissions` to Agy so it can install packages, clone repositories, and configure systemd services without waiting for interactive TTY confirmation.
 
-If you want both servers available to your agents, configure them as separate MCP servers — they use the same Proxmox API tokens and will not conflict.
+If your Agy workflows require authentication in headless server environments, make sure `ANTIGRAVITY_API_KEY` is configured in your template's environment.
+
+### Supporting Other Agents
+The agent integration is abstracted behind `BaseAgentProvider`. While Agy (`AgyProvider`) is currently the supported default, the architecture makes it straightforward to integrate other CLI agents in the future (such as OpenCode or Claude Code) by implementing the `BaseAgentProvider` interface.
 
 ## Running
 
@@ -185,7 +198,7 @@ If you want both servers available to your agents, configure them as separate MC
 
 # Or directly
 source .env
-DEGGIO_INFRA_CONFIG=config/config.yaml uv run deggio-infra-mcp
+PROXMOX_MCP_CONFIG=config/config.yaml uv run proxmox-mcp-server
 ```
 
 ### As an MCP Server (stdio)
@@ -195,11 +208,11 @@ Configure your MCP client (Claude Desktop, Cursor, etc.):
 ```json
 {
   "mcpServers": {
-    "deggio-infra-mcp": {
+    "proxmox-mcp-server": {
       "command": "uv",
-      "args": ["--directory", "/path/to/ProxmoxMcp", "run", "deggio-infra-mcp"],
+      "args": ["--directory", "/path/to/ProxmoxMcp", "run", "proxmox-mcp-server"],
       "env": {
-        "DEGGIO_INFRA_CONFIG": "/path/to/ProxmoxMcp/config/config.yaml",
+        "PROXMOX_MCP_CONFIG": "/path/to/ProxmoxMcp/config/config.yaml",
         "PROXMOX_TOKEN_ID": "mcp@pam!mcp-token",
         "PROXMOX_TOKEN_SECRET": "your-secret",
         "PIHOLE_PASSWORD": "your-password",
@@ -219,9 +232,17 @@ Configure your MCP client (Claude Desktop, Cursor, etc.):
 | `allocate_ip(hostname)` | Get next free IP from range |
 | `create_lxc_from_template(template_key, hostname, ip)` | Clone + configure a container |
 | `start_container(vmid)` | Start an LXC container |
+| `stop_container(vmid)` | Stop an LXC container |
+| `get_container_status(vmid)` | Query status of a container |
 | `wait_for_container(vmid)` | Wait until SSH is reachable |
+| `list_ip_reservations()` | List all IPAM reservations |
+| `release_ip(ip)` | Release an allocated IP address |
 | `add_pihole_dns_record(domain, ip)` | Create Pi-hole DNS record |
+| `delete_pihole_dns_record(domain, ip)` | Delete a Pi-hole DNS record |
+| `list_pihole_dns_records()` | List custom DNS records in Pi-hole |
 | `create_npm_proxy_host(domain, host, port)` | Create NPM proxy host |
+| `delete_npm_proxy_host(host_id)` | Delete an NPM proxy host by ID |
+| `list_npm_proxy_hosts()` | List all configured proxy hosts |
 | `run_agy_bootstrap(vmid, prompt)` | Execute Agy inside container |
 | `generate_agy_prompt(name, type, ...)` | Build a bootstrap prompt |
 | **`create_service(...)`** | **Full orchestration flow** |
@@ -236,7 +257,7 @@ Use the create_service tool:
 - repo_urls: ["https://github.com/user/my-app"]
 ```
 
-This will automatically: allocate an IP → clone the template → configure networking → start the container → wait for SSH → add DNS record (`my-web-app.deggio.local`) → create reverse proxy → run Agy to set up the service.
+This will automatically: allocate an IP → clone the template → configure networking → start the container → wait for SSH → add DNS record (`my-web-app.homelab.local`) → create reverse proxy → run Agy to set up the service.
 
 ## Deployment in LXC
 
@@ -250,15 +271,15 @@ apt update && apt install -y python3.11 python3.11-venv git
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
 # Create service user
-useradd -r -m -d /opt/deggio-infra-mcp -s /bin/bash deggio-mcp
+useradd -r -m -d /opt/proxmox-mcp-server -s /bin/bash proxmox-mcp
 ```
 
 ### 2. Deploy
 
 ```bash
-# As deggio-mcp user
-sudo -u deggio-mcp bash
-cd /opt/deggio-infra-mcp
+# As proxmox-mcp user
+sudo -u proxmox-mcp bash
+cd /opt/proxmox-mcp-server
 
 git clone https://github.com/DaniDeggio/ProxmoxMcp.git .
 uv venv
@@ -276,14 +297,14 @@ mkdir -p state
 ### 3. Install systemd service
 
 ```bash
-sudo cp deploy/deggio-infra-mcp.service /etc/systemd/system/
+sudo cp deploy/proxmox-mcp-server.service /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl enable deggio-infra-mcp
-sudo systemctl start deggio-infra-mcp
+sudo systemctl enable proxmox-mcp-server
+sudo systemctl start proxmox-mcp-server
 
 # Check status
-sudo systemctl status deggio-infra-mcp
-sudo journalctl -u deggio-infra-mcp -f
+sudo systemctl status proxmox-mcp-server
+sudo journalctl -u proxmox-mcp-server -f
 ```
 
 ## Testing
@@ -293,13 +314,13 @@ sudo journalctl -u deggio-infra-mcp -f
 uv run pytest tests/ -v
 
 # With coverage
-uv run pytest tests/ -v --cov=deggio_infra_mcp --cov-report=term-missing
+uv run pytest tests/ -v --cov=proxmox_mcp_server --cov-report=term-missing
 
 # Lint
 uv run ruff check src/ tests/
 
 # Type check
-uv run mypy src/deggio_infra_mcp/
+uv run mypy src/proxmox_mcp_server/
 ```
 
 ## Security Notes

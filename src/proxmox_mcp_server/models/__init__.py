@@ -1,16 +1,16 @@
 """Public model re-exports."""
 
-from deggio_infra_mcp.models.errors import (
-    AgyExecutionError,
+from proxmox_mcp_server.models.errors import (
+    AgentExecutionError,
     ConfigError,
-    DeggioInfraError,
     IpAllocationError,
     NpmError,
     PiHoleError,
+    ProxmoxMcpError,
     ProxmoxOperationError,
     ServiceProvisioningError,
 )
-from deggio_infra_mcp.models.service import (
+from proxmox_mcp_server.models.service import (
     CommandResult,
     ServiceRequest,
     ServiceResult,
@@ -18,13 +18,13 @@ from deggio_infra_mcp.models.service import (
     StepResult,
     StepStatus,
 )
-from deggio_infra_mcp.models.templates import TemplateInfo
+from proxmox_mcp_server.models.templates import TemplateInfo
 
 __all__ = [
-    "AgyExecutionError",
+    "AgentExecutionError",
     "CommandResult",
     "ConfigError",
-    "DeggioInfraError",
+    "ProxmoxMcpError",
     "IpAllocationError",
     "NpmError",
     "PiHoleError",

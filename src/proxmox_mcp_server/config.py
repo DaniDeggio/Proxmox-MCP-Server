@@ -15,8 +15,8 @@ from typing import Any
 import yaml
 from pydantic import BaseModel, Field, field_validator
 
-from deggio_infra_mcp.models.errors import ConfigError
-from deggio_infra_mcp.models.templates import TemplateInfo
+from proxmox_mcp_server.models.errors import ConfigError
+from proxmox_mcp_server.models.templates import TemplateInfo
 
 # ---------------------------------------------------------------------------
 # Env-var interpolation helper
@@ -37,7 +37,7 @@ def _interpolate_env(value: Any) -> Any:
             if env_val is not None:
                 return env_val  # type: ignore[no-any-return]
             if default is not None:
-                return default
+                return str(default)
             return str(m.group(0))  # leave unresolved placeholder as-is
 
         return _ENV_RE.sub(_replace, value)
@@ -118,7 +118,7 @@ class NpmConfig(BaseModel):
 
 
 class DomainsConfig(BaseModel):
-    local_suffix: str = "deggio.local"
+    local_suffix: str = "homelab.local"
 
 
 class AgyConfig(BaseModel):
@@ -126,6 +126,7 @@ class AgyConfig(BaseModel):
     default_user: str = "root"
     timeout_seconds: int = 600
     working_dir: str = "/root"
+    skip_permissions: bool = True
 
 
 class AppSettings(BaseModel):
@@ -174,7 +175,7 @@ def load_config(path: str | Path | None = None) -> AppConfig:
     """Load and validate the YAML configuration file.
 
     Args:
-        path: Explicit config path.  Falls back to ``DEGGIO_INFRA_CONFIG``
+        path: Explicit config path.  Falls back to ``PROXMOX_MCP_CONFIG``
               env var, then ``config/config.yaml``.
 
     Returns:
@@ -184,7 +185,7 @@ def load_config(path: str | Path | None = None) -> AppConfig:
         ConfigError: If the file is missing, unreadable, or fails validation.
     """
     if path is None:
-        path = os.environ.get("DEGGIO_INFRA_CONFIG", "config/config.yaml")
+        path = os.environ.get("PROXMOX_MCP_CONFIG", "config/config.yaml")
 
     config_path = Path(path)
     if not config_path.exists():

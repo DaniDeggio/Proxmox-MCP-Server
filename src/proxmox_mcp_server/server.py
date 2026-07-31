@@ -1,4 +1,4 @@
-"""Deggio Infra MCP server — entry point.
+"""Proxmox MCP Server — entry point.
 
 Wires configuration, providers, services, and MCP tools together.
 Supports stdio transport (default) with the architecture structured
@@ -11,15 +11,15 @@ import sys
 
 from fastmcp import FastMCP
 
-from deggio_infra_mcp.config import AppConfig, load_config
-from deggio_infra_mcp.logging import setup_logging
-from deggio_infra_mcp.providers.agy import AgyProvider
-from deggio_infra_mcp.providers.npm import NpmProvider
-from deggio_infra_mcp.providers.pihole import PiHoleProvider
-from deggio_infra_mcp.providers.proxmox import ProxmoxProvider
-from deggio_infra_mcp.services.ipam import IpamService
-from deggio_infra_mcp.services.provisioning import ProvisioningService
-from deggio_infra_mcp.tools.service_tools import register_tools
+from proxmox_mcp_server.config import AppConfig, load_config
+from proxmox_mcp_server.logging import setup_logging
+from proxmox_mcp_server.providers.agy import AgyProvider
+from proxmox_mcp_server.providers.npm import NpmProvider
+from proxmox_mcp_server.providers.pihole import PiHoleProvider
+from proxmox_mcp_server.providers.proxmox import ProxmoxProvider
+from proxmox_mcp_server.services.ipam import IpamService
+from proxmox_mcp_server.services.provisioning import ProvisioningService
+from proxmox_mcp_server.tools.service_tools import register_tools
 
 
 def build_server(config: AppConfig | None = None) -> FastMCP:
@@ -60,7 +60,7 @@ def build_server(config: AppConfig | None = None) -> FastMCP:
 
     # MCP server
     mcp = FastMCP(
-        name="deggio-infra-mcp",
+        name="proxmox-mcp-server",
         instructions=(
             "Homelab infrastructure provisioning MCP server. "
             "Orchestrates service deployment on Proxmox LXC containers "

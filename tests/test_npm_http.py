@@ -6,9 +6,9 @@ import httpx
 import pytest
 import respx
 
-from deggio_infra_mcp.config import NpmConfig
-from deggio_infra_mcp.models.errors import NpmError
-from deggio_infra_mcp.providers.npm import NpmProvider
+from proxmox_mcp_server.config import NpmConfig
+from proxmox_mcp_server.models.errors import NpmError
+from proxmox_mcp_server.providers.npm import NpmProvider
 
 
 def _make_provider(base_url: str = "http://npm.test:81") -> NpmProvider:

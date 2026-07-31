@@ -16,11 +16,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from deggio_infra_mcp.logging import get_logger
-from deggio_infra_mcp.models.errors import IpAllocationError
+from proxmox_mcp_server.logging import get_logger
+from proxmox_mcp_server.models.errors import IpAllocationError
 
 if TYPE_CHECKING:
-    from deggio_infra_mcp.config import NetworkConfig
+    from proxmox_mcp_server.config import NetworkConfig
 
 log = get_logger("services.ipam")
 

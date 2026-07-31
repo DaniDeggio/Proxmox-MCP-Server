@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from deggio_infra_mcp.models.errors import IpAllocationError
-from deggio_infra_mcp.services.ipam import IpamService
+from proxmox_mcp_server.models.errors import IpAllocationError
+from proxmox_mcp_server.services.ipam import IpamService
 
 
 class TestIpamAllocation:

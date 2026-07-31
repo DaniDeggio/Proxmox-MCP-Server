@@ -69,12 +69,12 @@ def setup_logging(level: str = "INFO", fmt: str = "console") -> structlog.stdlib
         logging.getLogger(name).setLevel(logging.WARNING)
 
     from typing import cast
-    return cast(structlog.stdlib.BoundLogger, structlog.get_logger("deggio_infra_mcp"))
+    return cast("structlog.stdlib.BoundLogger", structlog.get_logger("proxmox_mcp_server"))
 
 
 def get_logger(name: str | None = None) -> structlog.stdlib.BoundLogger:
     """Return a bound logger, optionally with a sub-name."""
     from typing import cast
     if name:
-        return cast("structlog.stdlib.BoundLogger", structlog.get_logger(f"deggio_infra_mcp.{name}"))
-    return cast("structlog.stdlib.BoundLogger", structlog.get_logger("deggio_infra_mcp"))
+        return cast("structlog.stdlib.BoundLogger", structlog.get_logger(f"proxmox_mcp_server.{name}"))
+    return cast("structlog.stdlib.BoundLogger", structlog.get_logger("proxmox_mcp_server"))

@@ -7,8 +7,8 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from deggio_infra_mcp.config import load_config
-from deggio_infra_mcp.models.errors import ConfigError
+from proxmox_mcp_server.config import load_config
+from proxmox_mcp_server.models.errors import ConfigError
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -62,7 +62,7 @@ npm:
   password: "test"
 
 domains:
-  local_suffix: "deggio.local"
+  local_suffix: "homelab.local"
 
 app:
   log_level: "DEBUG"
@@ -102,7 +102,7 @@ class TestConfigLoading:
         assert len(config.list_templates()) == 2
         assert config.get_template("base") is not None
         assert config.get_template("gpu") is not None
-        assert config.domains.local_suffix == "deggio.local"
+        assert config.domains.local_suffix == "homelab.local"
         assert config.app.log_level == "DEBUG"
 
     def test_missing_file_raises(self) -> None:

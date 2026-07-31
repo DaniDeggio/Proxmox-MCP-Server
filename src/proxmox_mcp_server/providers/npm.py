@@ -14,12 +14,12 @@ from typing import TYPE_CHECKING, Any
 
 import httpx
 
-from deggio_infra_mcp.logging import get_logger
-from deggio_infra_mcp.models.errors import NpmError
-from deggio_infra_mcp.providers import BaseNpmProvider
+from proxmox_mcp_server.logging import get_logger
+from proxmox_mcp_server.models.errors import NpmError
+from proxmox_mcp_server.providers import BaseNpmProvider
 
 if TYPE_CHECKING:
-    from deggio_infra_mcp.config import NpmConfig
+    from proxmox_mcp_server.config import NpmConfig
 
 log = get_logger("providers.npm")
 

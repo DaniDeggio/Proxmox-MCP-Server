@@ -7,11 +7,11 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from deggio_infra_mcp.models.errors import ServiceProvisioningError
-from deggio_infra_mcp.models.service import ServiceRequest, ServiceType, StepStatus
+from proxmox_mcp_server.models.errors import ServiceProvisioningError
+from proxmox_mcp_server.models.service import ServiceRequest, ServiceType, StepStatus
 
 if TYPE_CHECKING:
-    from deggio_infra_mcp.services.provisioning import ProvisioningService
+    from proxmox_mcp_server.services.provisioning import ProvisioningService
     from tests.conftest import MockProxmoxProvider
 
 
@@ -19,7 +19,7 @@ class TestCreateService:
     """Tests for the full create_service orchestration flow."""
 
     @pytest.mark.asyncio
-    @patch("deggio_infra_mcp.services.provisioning.wait_for_port", return_value=True)
+    @patch("proxmox_mcp_server.services.provisioning.wait_for_port", return_value=True)
     async def test_full_flow_success(
         self, mock_wait: AsyncMock, provisioning_service: ProvisioningService
     ) -> None:
@@ -34,7 +34,7 @@ class TestCreateService:
 
         assert result.success is True
         assert result.hostname == "test-app"
-        assert result.domain == "test-app.deggio.local"
+        assert result.domain == "test-app.homelab.local"
         assert result.ip == "192.168.1.200"
         assert result.vmid is not None
         assert result.template_key == "base"
@@ -44,7 +44,7 @@ class TestCreateService:
         assert "start_container" in result.completed_steps
 
     @pytest.mark.asyncio
-    @patch("deggio_infra_mcp.services.provisioning.wait_for_port", return_value=True)
+    @patch("proxmox_mcp_server.services.provisioning.wait_for_port", return_value=True)
     async def test_skip_optional_steps(
         self, mock_wait: AsyncMock, provisioning_service: ProvisioningService
     ) -> None:
@@ -75,7 +75,7 @@ class TestCreateService:
             await provisioning_service.create_service(request)
 
     @pytest.mark.asyncio
-    @patch("deggio_infra_mcp.services.provisioning.wait_for_port", return_value=False)
+    @patch("proxmox_mcp_server.services.provisioning.wait_for_port", return_value=False)
     async def test_container_unreachable(
         self, mock_wait: AsyncMock, provisioning_service: ProvisioningService
     ) -> None:
@@ -90,7 +90,7 @@ class TestCreateService:
             await provisioning_service.create_service(request)
 
     @pytest.mark.asyncio
-    @patch("deggio_infra_mcp.services.provisioning.wait_for_port", return_value=True)
+    @patch("proxmox_mcp_server.services.provisioning.wait_for_port", return_value=True)
     async def test_step_tracking(
         self, mock_wait: AsyncMock, provisioning_service: ProvisioningService
     ) -> None:
@@ -108,7 +108,7 @@ class TestCreateService:
             assert step.completed_at is not None
 
     @pytest.mark.asyncio
-    @patch("deggio_infra_mcp.services.provisioning.wait_for_port", return_value=True)
+    @patch("proxmox_mcp_server.services.provisioning.wait_for_port", return_value=True)
     async def test_correlation_id_set(
         self, mock_wait: AsyncMock, provisioning_service: ProvisioningService
     ) -> None:

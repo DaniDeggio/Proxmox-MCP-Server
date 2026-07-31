@@ -21,13 +21,13 @@ from typing import TYPE_CHECKING, Any
 
 from proxmoxer import ProxmoxAPI
 
-from deggio_infra_mcp.logging import get_logger
-from deggio_infra_mcp.models.errors import ProxmoxOperationError
-from deggio_infra_mcp.models.service import CommandResult
-from deggio_infra_mcp.providers import BaseProxmoxProvider
+from proxmox_mcp_server.logging import get_logger
+from proxmox_mcp_server.models.errors import ProxmoxOperationError
+from proxmox_mcp_server.models.service import CommandResult
+from proxmox_mcp_server.providers import BaseProxmoxProvider
 
 if TYPE_CHECKING:
-    from deggio_infra_mcp.config import ProxmoxConfig
+    from proxmox_mcp_server.config import ProxmoxConfig
 
 log = get_logger("providers.proxmox")
 

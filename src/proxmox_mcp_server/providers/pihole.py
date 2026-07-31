@@ -21,12 +21,12 @@ from urllib.parse import quote
 
 import httpx
 
-from deggio_infra_mcp.logging import get_logger
-from deggio_infra_mcp.models.errors import PiHoleError
-from deggio_infra_mcp.providers import BasePiHoleProvider
+from proxmox_mcp_server.logging import get_logger
+from proxmox_mcp_server.models.errors import PiHoleError
+from proxmox_mcp_server.providers import BasePiHoleProvider
 
 if TYPE_CHECKING:
-    from deggio_infra_mcp.config import PiHoleConfig
+    from proxmox_mcp_server.config import PiHoleConfig
 
 log = get_logger("providers.pihole")
 

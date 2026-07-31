@@ -12,7 +12,7 @@ from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from deggio_infra_mcp.models.service import CommandResult
+    from proxmox_mcp_server.models.service import CommandResult
 
 
 class BaseProxmoxProvider(ABC):
@@ -124,7 +124,7 @@ class BaseNpmProvider(ABC):
         """Delete a proxy host by its NPM ID."""
 
 
-class BaseAgyProvider(ABC):
+class BaseAgentProvider(ABC):
     """Adapter interface for running Agy bootstraps inside containers."""
 
     @abstractmethod

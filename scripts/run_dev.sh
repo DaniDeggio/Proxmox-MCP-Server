@@ -15,17 +15,17 @@ if [[ -f "$SCRIPT_DIR/.env" ]]; then
 fi
 
 # Default config path
-export DEGGIO_INFRA_CONFIG="${DEGGIO_INFRA_CONFIG:-$SCRIPT_DIR/config/config.yaml}"
-export DEGGIO_INFRA_LOG_LEVEL="${DEGGIO_INFRA_LOG_LEVEL:-DEBUG}"
+export PROXMOX_MCP_CONFIG="${PROXMOX_MCP_CONFIG:-$SCRIPT_DIR/config/config.yaml}"
+export PROXMOX_MCP_LOG_LEVEL="${PROXMOX_MCP_LOG_LEVEL:-DEBUG}"
 
-echo "Config: $DEGGIO_INFRA_CONFIG"
-echo "Log level: $DEGGIO_INFRA_LOG_LEVEL"
+echo "Config: $PROXMOX_MCP_CONFIG"
+echo "Log level: $PROXMOX_MCP_LOG_LEVEL"
 
 # Run the MCP server
 if command -v uv &>/dev/null; then
     echo "Running with uv..."
-    uv run deggio-infra-mcp
+    uv run proxmox-mcp-server
 else
     echo "Running with Python..."
-    python -m deggio_infra_mcp.server
+    python -m proxmox_mcp_server.server
 fi

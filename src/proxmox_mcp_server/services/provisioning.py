@@ -13,27 +13,27 @@ from typing import TYPE_CHECKING, Any
 
 import structlog
 
-from deggio_infra_mcp.logging import get_logger
-from deggio_infra_mcp.models.errors import ServiceProvisioningError
-from deggio_infra_mcp.models.service import (
+from proxmox_mcp_server.logging import get_logger
+from proxmox_mcp_server.models.errors import ServiceProvisioningError
+from proxmox_mcp_server.models.service import (
     ServiceRequest,
     ServiceResult,
     StepResult,
     StepStatus,
 )
-from deggio_infra_mcp.services.prompt_generator import generate_agy_prompt
-from deggio_infra_mcp.utils.network import wait_for_port
+from proxmox_mcp_server.services.prompt_generator import generate_agy_prompt
+from proxmox_mcp_server.utils.network import wait_for_port
 
 if TYPE_CHECKING:
-    from deggio_infra_mcp.config import AppConfig
-    from deggio_infra_mcp.models.templates import TemplateInfo
-    from deggio_infra_mcp.providers import (
-        BaseAgyProvider,
+    from proxmox_mcp_server.config import AppConfig
+    from proxmox_mcp_server.models.templates import TemplateInfo
+    from proxmox_mcp_server.providers import (
+        BaseAgentProvider,
         BaseNpmProvider,
         BasePiHoleProvider,
         BaseProxmoxProvider,
     )
-    from deggio_infra_mcp.services.ipam import IpamService
+    from proxmox_mcp_server.services.ipam import IpamService
 
 log = get_logger("services.provisioning")
 
@@ -47,7 +47,7 @@ class ProvisioningService:
         proxmox: BaseProxmoxProvider,
         pihole: BasePiHoleProvider,
         npm: BaseNpmProvider,
-        agy: BaseAgyProvider,
+        agy: BaseAgentProvider,
         ipam: IpamService,
     ) -> None:
         self._config = config

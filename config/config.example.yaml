@@ -1,5 +1,5 @@
 # =============================================================================
-# Deggio Infra MCP — Configuration
+# Proxmox MCP Server — Configuration
 # =============================================================================
 # Copy this file to config/config.yaml and fill in your values.
 # Secrets should be set via environment variables (see .env.example).
@@ -79,13 +79,14 @@ npm:
 
 # --- Domain settings ---
 domains:
-  local_suffix: "deggio.local"
+  local_suffix: "homelab.local"  # Domain suffix for local DNS records
 
-# --- Agy bootstrap ---
+# --- Agy bootstrap (Google Antigravity CLI coding agent) ---
 agy:
   command: "agy"
   default_user: "root"
   timeout_seconds: 600
+  skip_permissions: true  # Enables --dangerously-skip-permissions for automated headless execution
   # working_dir will default to /root if not specified
 
 # --- App settings ---

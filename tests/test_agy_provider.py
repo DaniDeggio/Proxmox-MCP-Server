@@ -6,11 +6,11 @@ from typing import Any
 
 import pytest
 
-from deggio_infra_mcp.config import AgyConfig
-from deggio_infra_mcp.models.errors import AgyExecutionError
-from deggio_infra_mcp.models.service import CommandResult
-from deggio_infra_mcp.providers import BaseProxmoxProvider
-from deggio_infra_mcp.providers.agy import AgyProvider
+from proxmox_mcp_server.config import AgyConfig
+from proxmox_mcp_server.models.errors import AgentExecutionError
+from proxmox_mcp_server.models.service import CommandResult
+from proxmox_mcp_server.providers import BaseProxmoxProvider
+from proxmox_mcp_server.providers.agy import AgyProvider
 
 
 class FakeProxmoxForAgy(BaseProxmoxProvider):
@@ -93,7 +93,7 @@ class TestAgyBootstrap:
         )
         agy = AgyProvider(AgyConfig(command="agy"), proxmox=proxmox)
 
-        with pytest.raises(AgyExecutionError, match="exited with code 1"):
+        with pytest.raises(AgentExecutionError, match="exited with code 1"):
             await agy.run_bootstrap(vmid=203, prompt="fail")
 
     @pytest.mark.asyncio
@@ -101,7 +101,7 @@ class TestAgyBootstrap:
         proxmox = FakeProxmoxForAgy(error=RuntimeError("SSH connection refused"))
         agy = AgyProvider(AgyConfig(command="agy"), proxmox=proxmox)
 
-        with pytest.raises(AgyExecutionError, match="SSH connection refused"):
+        with pytest.raises(AgentExecutionError, match="SSH connection refused"):
             await agy.run_bootstrap(vmid=204, prompt="fail")
 
     @pytest.mark.asyncio

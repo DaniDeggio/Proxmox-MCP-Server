@@ -1,4 +1,4 @@
-"""Domain-specific exceptions for deggio_infra_mcp.
+"""Domain-specific exceptions for proxmox_mcp_server.
 
 Each exception maps to a clear failure domain so callers can handle
 errors precisely without catching overly broad exception types.
@@ -7,19 +7,19 @@ errors precisely without catching overly broad exception types.
 from __future__ import annotations
 
 
-class DeggioInfraError(Exception):
-    """Base exception for all deggio_infra_mcp errors."""
+class ProxmoxMcpError(Exception):
+    """Base exception for all proxmox_mcp_server errors."""
 
     def __init__(self, message: str, *, details: dict | None = None) -> None:
         super().__init__(message)
         self.details = details or {}
 
 
-class ConfigError(DeggioInfraError):
+class ConfigError(ProxmoxMcpError):
     """Configuration loading or validation failure."""
 
 
-class ProxmoxOperationError(DeggioInfraError):
+class ProxmoxOperationError(ProxmoxMcpError):
     """A Proxmox API call failed."""
 
     def __init__(
@@ -35,19 +35,19 @@ class ProxmoxOperationError(DeggioInfraError):
         self.operation = operation
 
 
-class IpAllocationError(DeggioInfraError):
+class IpAllocationError(ProxmoxMcpError):
     """IP allocation or release failed (exhausted range, conflict, etc.)."""
 
 
-class PiHoleError(DeggioInfraError):
+class PiHoleError(ProxmoxMcpError):
     """Pi-hole API call failed."""
 
 
-class NpmError(DeggioInfraError):
+class NpmError(ProxmoxMcpError):
     """Nginx Proxy Manager API call failed."""
 
 
-class AgyExecutionError(DeggioInfraError):
+class AgentExecutionError(ProxmoxMcpError):
     """Agy bootstrap execution failed inside a container."""
 
     def __init__(
@@ -63,7 +63,7 @@ class AgyExecutionError(DeggioInfraError):
         self.exit_code = exit_code
 
 
-class ServiceProvisioningError(DeggioInfraError):
+class ServiceProvisioningError(ProxmoxMcpError):
     """The create_service orchestration flow failed.
 
     Carries partial results so the caller can inspect what succeeded.

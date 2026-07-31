@@ -6,9 +6,9 @@ import httpx
 import pytest
 import respx
 
-from deggio_infra_mcp.config import PiHoleConfig
-from deggio_infra_mcp.models.errors import PiHoleError
-from deggio_infra_mcp.providers.pihole import PiHoleProvider
+from proxmox_mcp_server.config import PiHoleConfig
+from proxmox_mcp_server.models.errors import PiHoleError
+from proxmox_mcp_server.providers.pihole import PiHoleProvider
 
 
 def _make_provider(base_url: str = "http://pihole.test") -> PiHoleProvider:
