@@ -42,6 +42,7 @@ class MockProxmoxProvider(BaseProxmoxProvider):
 
     def __init__(self) -> None:
         self.containers: dict[int, dict[str, Any]] = {}
+        self.snapshots: dict[tuple[int, str], dict[str, Any]] = {}
         self._next_vmid = 200
 
     async def clone_container(
@@ -72,7 +73,14 @@ class MockProxmoxProvider(BaseProxmoxProvider):
 
     async def get_container_status(self, vmid: int, **kwargs: Any) -> dict[str, Any]:
         ct = self.containers.get(vmid, {})
-        return {"status": ct.get("status", "unknown"), "vmid": vmid}
+        result: dict[str, Any] = {"status": ct.get("status", "unknown"), "vmid": vmid}
+        # Include net0 if present so _extract_ip_from_status can find the IP
+        if "net0" in ct:
+            result["net0"] = ct["net0"]
+        if "ip" in ct:
+            result["ip"] = ct["ip"]
+        return result
+
 
     async def execute_command(
         self, vmid: int, command: str, **kwargs: Any
@@ -83,6 +91,62 @@ class MockProxmoxProvider(BaseProxmoxProvider):
         vmid = self._next_vmid
         self._next_vmid += 1
         return vmid
+
+    async def create_snapshot(
+        self, vmid: int, name: str, *, description: str = "", **kwargs: Any
+    ) -> dict[str, Any]:
+        key = (vmid, name)
+        self.snapshots[key] = {
+            "name": name,
+            "description": description,
+            "snaptime": 0,
+            "parent": "",
+        }
+        return {"vmid": vmid, "snapshot_name": name, "action": "created"}
+
+    async def list_snapshots(self, vmid: int, **kwargs: Any) -> list[dict[str, Any]]:
+        return [v for (vid, _), v in self.snapshots.items() if vid == vmid]
+
+    async def rollback_snapshot(self, vmid: int, name: str, **kwargs: Any) -> dict[str, Any]:
+        return {"vmid": vmid, "snapshot_name": name, "action": "rolled_back"}
+
+    async def list_containers(self, **kwargs: Any) -> list[dict[str, Any]]:
+        return [
+            {
+                "vmid": vmid,
+                "name": info.get("hostname", f"ct{vmid}"),
+                "status": info.get("status", "stopped"),
+                "cpus": 2,
+                "mem": 536870912,
+                "maxmem": 2147483648,
+                "uptime": 0,
+            }
+            for vmid, info in self.containers.items()
+        ]
+
+    async def get_storage_status(self, storage: str, **kwargs: Any) -> dict[str, Any]:
+        return {
+            "storage": storage,
+            "total_gb": 100.0,
+            "used_gb": 40.0,
+            "avail_gb": 60.0,
+            "used_pct": 40.0,
+            "type": "lvm",
+            "enabled": True,
+        }
+
+    async def resize_disk(
+        self, vmid: int, size_gb: int, *, disk: str = "rootfs", **kwargs: Any
+    ) -> dict[str, Any]:
+        return {"vmid": vmid, "disk": disk, "new_size_gb": size_gb, "action": "resized"}
+
+    async def get_task_status(self, upid: str, **kwargs: Any) -> dict[str, Any]:
+        return {"upid": upid, "status": "stopped", "exitstatus": "OK"}
+    async def get_task_log(self, upid: str, *, limit: int = 50, **kwargs: Any) -> list[dict[str, Any]]:
+        return [{"n": 1, "t": f"Task {upid} completed"}]
+
+    async def execute_host_command(self, command: str, **kwargs: Any) -> CommandResult:
+        return CommandResult(exit_code=0, stdout="Host OK", stderr="", duration_seconds=1.0)
 
 
 class MockPiHoleProvider(BasePiHoleProvider):
@@ -160,6 +224,16 @@ class MockAgyProvider(BaseAgentProvider):
         return CommandResult(
             exit_code=0,
             stdout="Bootstrap completed successfully",
+            stderr="",
+            duration_seconds=5.0,
+        )
+
+    async def run_on_host(
+        self, prompt: str, **kwargs: Any
+    ) -> CommandResult:
+        return CommandResult(
+            exit_code=0,
+            stdout="Host Agy completed successfully",
             stderr="",
             duration_seconds=5.0,
         )

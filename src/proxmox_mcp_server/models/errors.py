@@ -47,6 +47,22 @@ class NpmError(ProxmoxMcpError):
     """Nginx Proxy Manager API call failed."""
 
 
+class SnapshotError(ProxmoxMcpError):
+    """A snapshot or rollback operation failed."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        vmid: int | None = None,
+        snapshot_name: str | None = None,
+        details: dict | None = None,
+    ) -> None:
+        super().__init__(message, details=details)
+        self.vmid = vmid
+        self.snapshot_name = snapshot_name
+
+
 class AgentExecutionError(ProxmoxMcpError):
     """Agy bootstrap execution failed inside a container."""
 

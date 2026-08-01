@@ -73,9 +73,95 @@ class BaseProxmoxProvider(ABC):
         """Execute a command inside a running container."""
 
     @abstractmethod
+    async def execute_host_command(
+        self,
+        command: str,
+        *,
+        node: str | None = None,
+        timeout: int = 60,
+    ) -> CommandResult:
+        """Execute a command directly on the Proxmox host (not inside a container)."""
+
+    @abstractmethod
     async def get_next_vmid(self) -> int:
         """Return the next free VMID from Proxmox."""
 
+    @abstractmethod
+    async def create_snapshot(
+        self,
+        vmid: int,
+        name: str,
+        *,
+        description: str = "",
+        node: str | None = None,
+    ) -> dict[str, Any]:
+        """Create a snapshot of an LXC container."""
+
+    @abstractmethod
+    async def list_snapshots(
+        self,
+        vmid: int,
+        *,
+        node: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """List all snapshots of an LXC container."""
+
+    @abstractmethod
+    async def rollback_snapshot(
+        self,
+        vmid: int,
+        name: str,
+        *,
+        node: str | None = None,
+    ) -> dict[str, Any]:
+        """Rollback an LXC container to a named snapshot."""
+
+    @abstractmethod
+    async def list_containers(
+        self,
+        *,
+        node: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """List all LXC containers on the node."""
+
+    @abstractmethod
+    async def get_storage_status(
+        self,
+        storage: str,
+        *,
+        node: str | None = None,
+    ) -> dict[str, Any]:
+        """Return usage statistics for a Proxmox storage pool."""
+
+    @abstractmethod
+    async def resize_disk(
+        self,
+        vmid: int,
+        size_gb: int,
+        *,
+        disk: str = "rootfs",
+        node: str | None = None,
+    ) -> dict[str, Any]:
+        """Resize an LXC container disk (grow only)."""
+
+    @abstractmethod
+    async def get_task_status(
+        self,
+        upid: str,
+        *,
+        node: str | None = None,
+    ) -> dict[str, Any]:
+        """Return the current status of a Proxmox task by UPID."""
+
+    @abstractmethod
+    async def get_task_log(
+        self,
+        upid: str,
+        *,
+        limit: int = 50,
+        node: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Return the log lines of a Proxmox task by UPID."""
 
 class BasePiHoleProvider(ABC):
     """Adapter interface for Pi-hole DNS management."""
@@ -136,3 +222,12 @@ class BaseAgentProvider(ABC):
         working_dir: str | None = None,
     ) -> CommandResult:
         """Execute an Agy session inside the specified container."""
+
+    @abstractmethod
+    async def run_on_host(
+        self,
+        prompt: str,
+        *,
+        working_dir: str | None = None,
+    ) -> CommandResult:
+        """Execute an Agy session directly on the Proxmox host."""

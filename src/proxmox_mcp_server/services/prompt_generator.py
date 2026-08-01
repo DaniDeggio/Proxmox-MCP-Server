@@ -96,3 +96,78 @@ def generate_agy_prompt(
     ])
 
     return "\n".join(sections)
+
+
+def generate_host_agy_prompt(
+    task_description: str,
+    task_category: str = "maintenance",
+    *,
+    extra_requirements: str = "",
+    docs_urls: list[str] | None = None,
+) -> str:
+    """Generate a safety-aware Agy prompt for Proxmox host operations.
+
+    Args:
+        task_description: Description of the host administration task.
+        task_category: One of maintenance, template, storage, network, custom.
+        extra_requirements: Additional constraints or requirements.
+        docs_urls: Reference URLs for documentation.
+
+    Returns:
+        A multi-line structured prompt string for Agy on the Proxmox host.
+    """
+    docs_urls = docs_urls or []
+
+    category_notes: dict[str, str] = {
+        "maintenance": "Focus on system health, package updates, cleanups, and diagnostics.",
+        "template": "Focus on managing or customizing LXC container templates (pveam, pct).",
+        "storage": "Focus on storage pools, ZFS datasets, LVM, and Proxmox storage configuration.",
+        "network": "Focus on network bridges (vmbr), VLANs, routing, and firewall rules.",
+        "custom": "Execute the custom host administration task safely.",
+    }
+
+    cat_desc = category_notes.get(task_category, category_notes["custom"])
+
+    sections: list[str] = [
+        f"# Host Task: {task_description}",
+        "",
+        "## Context",
+        "You are operating directly on a **Proxmox VE hypervisor host**. "
+        "This machine runs the Proxmox Virtual Environment and manages all VMs and LXC containers.",
+        f"Category ({task_category}): {cat_desc}",
+        "",
+        "## Safety Rules",
+        "- NEVER remove packages matching `proxmox-*`, `pve-*`, `ceph-*`, or `corosync`.",
+        "- NEVER modify `/etc/pve/` files directly unless explicitly instructed.",
+        "- ALWAYS back up configuration files before modifying them: `cp <file> <file>.bak.$(date +%s)`.",
+        "- ALWAYS verify changes are safe with dry-run flags when available.",
+        "- If unsure about a destructive operation, print a warning and STOP.",
+        "",
+        "## Available Tools & Commands",
+        "You have access to Proxmox VE administration tools including `pveam`, `pct`, `qm`, `pvecm`, `zpool`, `zfs`, and standard Linux utilities.",
+        "",
+        "## Instructions",
+        f"1. {task_description}",
+    ]
+
+    if docs_urls:
+        sections.append("")
+        sections.append("## Reference documentation")
+        for url in docs_urls:
+            sections.append(f"- {url}")
+
+    if extra_requirements:
+        sections.append("")
+        sections.append("## Additional requirements")
+        sections.append(extra_requirements)
+
+    sections.extend([
+        "",
+        "## Completion criteria",
+        "- Task completed safely without disrupting hypervisor or running containers.",
+        "- Any modified configuration files have backups.",
+        "- A clear summary of changes and verification steps printed to stdout.",
+    ])
+
+    return "\n".join(sections)
+

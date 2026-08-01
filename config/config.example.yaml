@@ -81,13 +81,14 @@ npm:
 domains:
   local_suffix: "homelab.local"  # Domain suffix for local DNS records
 
-# --- Agy bootstrap (Google Antigravity CLI coding agent) ---
+# --- Agy agent (Google Antigravity CLI coding agent for LXC container & host administration) ---
 agy:
-  command: "agy"
+  command: "agy"                    # Agy command (must be in PATH on host AND in LXC templates)
   default_user: "root"
-  timeout_seconds: 600
-  skip_permissions: true  # Enables --dangerously-skip-permissions for automated headless execution
+  timeout_seconds: 600              # Applies to both container bootstrap and host execution
+  skip_permissions: true            # Enables --dangerously-skip-permissions for automated headless execution
   # working_dir will default to /root if not specified
+
 
 # --- App settings ---
 app:

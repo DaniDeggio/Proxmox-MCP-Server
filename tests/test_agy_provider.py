@@ -46,8 +46,40 @@ class FakeProxmoxForAgy(BaseProxmoxProvider):
             raise self._error
         return self._result
 
+    async def execute_host_command(self, command: str, **kwargs: Any) -> CommandResult:
+        self.last_command = command
+        self.last_timeout = kwargs.get("timeout", 60)
+        if self._error:
+            raise self._error
+        return self._result
+
     async def get_next_vmid(self) -> int:
         return 100
+
+    async def create_snapshot(self, vmid: int, name: str, **kwargs: Any) -> dict[str, Any]:
+        return {"vmid": vmid, "snapshot_name": name, "action": "created"}
+
+    async def list_snapshots(self, vmid: int, **kwargs: Any) -> list[dict[str, Any]]:
+        return []
+
+    async def rollback_snapshot(self, vmid: int, name: str, **kwargs: Any) -> dict[str, Any]:
+        return {"vmid": vmid, "snapshot_name": name, "action": "rolled_back"}
+
+    async def list_containers(self, **kwargs: Any) -> list[dict[str, Any]]:
+        return []
+
+    async def get_storage_status(self, storage: str, **kwargs: Any) -> dict[str, Any]:
+        return {"storage": storage, "total_gb": 100.0, "used_gb": 40.0, "avail_gb": 60.0, "used_pct": 40.0}
+
+    async def resize_disk(self, vmid: int, size_gb: int, **kwargs: Any) -> dict[str, Any]:
+        return {"vmid": vmid, "new_size_gb": size_gb, "action": "resized"}
+
+    async def get_task_status(self, upid: str, **kwargs: Any) -> dict[str, Any]:
+        return {"upid": upid, "status": "stopped", "exitstatus": "OK"}
+
+    async def get_task_log(self, upid: str, **kwargs: Any) -> list[dict[str, Any]]:
+        return [{"n": 1, "t": "done"}]
+
 
 
 class TestAgyBootstrap:

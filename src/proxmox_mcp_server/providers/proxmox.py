@@ -319,6 +319,62 @@ class ProxmoxProvider(BaseProxmoxProvider):
                 operation="exec",
             ) from exc
 
+
+    async def execute_host_command(
+        self,
+        command: str,
+        *,
+        node: str | None = None,
+        timeout: int = 60,
+    ) -> CommandResult:
+        """Execute a command directly on the Proxmox host via SSH."""
+        n = self._node_name(node)
+        log.info("executing_host_command", node=n, command=command[:80])
+        ssh_cfg = self._config.ssh
+
+        if not ssh_cfg.host:
+            raise ProxmoxOperationError(
+                "SSH config not set — cannot execute commands on Proxmox host",
+                operation="exec_host",
+            )
+
+        start = time.monotonic()
+        try:
+            import paramiko
+
+            client = paramiko.SSHClient()
+            client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            connect_kwargs: dict[str, Any] = {
+                "hostname": ssh_cfg.host,
+                "port": ssh_cfg.port,
+                "username": ssh_cfg.user,
+                "timeout": 10,
+            }
+            if ssh_cfg.key_file:
+                connect_kwargs["key_filename"] = ssh_cfg.key_file
+            client.connect(**connect_kwargs)
+
+            full_cmd = f"bash -c {_shell_quote(command)}"
+            _, stdout_ch, stderr_ch = client.exec_command(full_cmd, timeout=timeout)
+            exit_code = stdout_ch.channel.recv_exit_status()
+            stdout = stdout_ch.read().decode(errors="replace")
+            stderr = stderr_ch.read().decode(errors="replace")
+            client.close()
+
+            duration = time.monotonic() - start
+            return CommandResult(
+                exit_code=exit_code,
+                stdout=stdout,
+                stderr=stderr,
+                duration_seconds=round(duration, 2),
+            )
+        except Exception as exc:
+            duration = time.monotonic() - start
+            raise ProxmoxOperationError(
+                f"Host command execution failed: {exc}",
+                operation="exec_host",
+            ) from exc
+
     async def get_next_vmid(self) -> int:
         """Ask Proxmox for the next free VMID."""
         try:
@@ -328,6 +384,241 @@ class ProxmoxProvider(BaseProxmoxProvider):
             raise ProxmoxOperationError(
                 f"Failed to get next VMID: {exc}",
                 operation="nextid",
+            ) from exc
+
+    # ------------------------------------------------------------------
+    # Snapshot management
+    # ------------------------------------------------------------------
+
+    async def create_snapshot(
+        self,
+        vmid: int,
+        name: str,
+        *,
+        description: str = "",
+        node: str | None = None,
+    ) -> dict[str, Any]:
+        """Create a snapshot of an LXC container."""
+        n = self._node_name(node)
+        log.info("creating_snapshot", vmid=vmid, name=name, node=n)
+        try:
+            params: dict[str, Any] = {"snapname": name}
+            if description:
+                params["description"] = description
+            upid = await self._run_sync(
+                self._api.nodes(n).lxc(vmid).snapshot.post, **params
+            )
+            if isinstance(upid, str):
+                await self._wait_for_task(n, upid)
+            log.info("snapshot_created", vmid=vmid, name=name)
+            return {"vmid": vmid, "snapshot_name": name, "action": "created"}
+        except ProxmoxOperationError:
+            raise
+        except Exception as exc:
+            raise ProxmoxOperationError(
+                f"Failed to create snapshot '{name}' for VMID {vmid}: {exc}",
+                vmid=vmid,
+                operation="create_snapshot",
+            ) from exc
+
+    async def list_snapshots(
+        self,
+        vmid: int,
+        *,
+        node: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """List all snapshots of an LXC container."""
+        n = self._node_name(node)
+        try:
+            raw = await self._run_sync(
+                self._api.nodes(n).lxc(vmid).snapshot.get
+            )
+            if isinstance(raw, list):
+                # Filter out the 'current' pseudo-snapshot Proxmox always returns
+                return [s for s in raw if s.get("name") != "current"]
+            return []
+        except Exception as exc:
+            raise ProxmoxOperationError(
+                f"Failed to list snapshots for VMID {vmid}: {exc}",
+                vmid=vmid,
+                operation="list_snapshots",
+            ) from exc
+
+    async def rollback_snapshot(
+        self,
+        vmid: int,
+        name: str,
+        *,
+        node: str | None = None,
+    ) -> dict[str, Any]:
+        """Rollback an LXC container to a named snapshot.
+
+        Note: The container must be stopped before rolling back.
+        The caller is responsible for stopping it first.
+        """
+        n = self._node_name(node)
+        log.info("rolling_back_snapshot", vmid=vmid, name=name, node=n)
+        try:
+            upid = await self._run_sync(
+                self._api.nodes(n).lxc(vmid).snapshot(name).rollback.post
+            )
+            if isinstance(upid, str):
+                await self._wait_for_task(n, upid)
+            log.info("snapshot_rolled_back", vmid=vmid, name=name)
+            return {"vmid": vmid, "snapshot_name": name, "action": "rolled_back"}
+        except ProxmoxOperationError:
+            raise
+        except Exception as exc:
+            raise ProxmoxOperationError(
+                f"Failed to rollback to snapshot '{name}' for VMID {vmid}: {exc}",
+                vmid=vmid,
+                operation="rollback_snapshot",
+            ) from exc
+
+    # ------------------------------------------------------------------
+    # Infrastructure inspection
+    # ------------------------------------------------------------------
+
+    async def list_containers(
+        self,
+        *,
+        node: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """List all LXC containers on the node."""
+        n = self._node_name(node)
+        try:
+            raw = await self._run_sync(self._api.nodes(n).lxc.get)
+            if isinstance(raw, list):
+                return raw
+            return []
+        except Exception as exc:
+            raise ProxmoxOperationError(
+                f"Failed to list containers on node {n}: {exc}",
+                operation="list_containers",
+            ) from exc
+
+    async def get_storage_status(
+        self,
+        storage: str,
+        *,
+        node: str | None = None,
+    ) -> dict[str, Any]:
+        """Return usage statistics for a Proxmox storage pool."""
+        n = self._node_name(node)
+        try:
+            raw = await self._run_sync(
+                self._api.nodes(n).storage(storage).status.get
+            )
+            if not isinstance(raw, dict):
+                return {"storage": storage, "raw": raw}
+            # Convert bytes to GB for human-readability
+            total_bytes = raw.get("total", 0)
+            used_bytes = raw.get("used", 0)
+            avail_bytes = raw.get("avail", 0)
+            _gb = 1024 ** 3
+            return {
+                "storage": storage,
+                "total_gb": round(total_bytes / _gb, 2),
+                "used_gb": round(used_bytes / _gb, 2),
+                "avail_gb": round(avail_bytes / _gb, 2),
+                "used_pct": round(used_bytes / total_bytes * 100, 1) if total_bytes else 0,
+                "type": raw.get("type"),
+                "enabled": raw.get("enabled", True),
+            }
+        except ProxmoxOperationError:
+            raise
+        except Exception as exc:
+            raise ProxmoxOperationError(
+                f"Failed to get storage status for '{storage}' on node {n}: {exc}",
+                operation="storage_status",
+            ) from exc
+
+    # ------------------------------------------------------------------
+    # Resource management
+    # ------------------------------------------------------------------
+
+    async def resize_disk(
+        self,
+        vmid: int,
+        size_gb: int,
+        *,
+        disk: str = "rootfs",
+        node: str | None = None,
+    ) -> dict[str, Any]:
+        """Resize an LXC container disk (grow only).
+
+        Proxmox does not support shrinking disks, so we only allow
+        increasing the size. The caller should validate that size_gb
+        is larger than the current disk before calling this method.
+        """
+        n = self._node_name(node)
+        log.info("resizing_disk", vmid=vmid, disk=disk, size_gb=size_gb, node=n)
+        try:
+            await self._run_sync(
+                self._api.nodes(n).lxc(vmid).resize.put,
+                disk=disk,
+                size=f"{size_gb}G",
+            )
+            log.info("disk_resized", vmid=vmid, disk=disk, size_gb=size_gb)
+            return {
+                "vmid": vmid,
+                "disk": disk,
+                "new_size_gb": size_gb,
+                "action": "resized",
+            }
+        except Exception as exc:
+            raise ProxmoxOperationError(
+                f"Failed to resize disk '{disk}' for VMID {vmid} to {size_gb}G: {exc}",
+                vmid=vmid,
+                operation="resize_disk",
+            ) from exc
+
+    # ------------------------------------------------------------------
+    # Task tracking (expose internal _wait_for_task primitives)
+    # ------------------------------------------------------------------
+
+    async def get_task_status(
+        self,
+        upid: str,
+        *,
+        node: str | None = None,
+    ) -> dict[str, Any]:
+        """Return the current status of a Proxmox task by UPID."""
+        n = self._node_name(node)
+        try:
+            raw = await self._run_sync(
+                self._api.nodes(n).tasks(upid).status.get
+            )
+            if isinstance(raw, dict):
+                return raw
+            return {"upid": upid, "raw": raw}
+        except Exception as exc:
+            raise ProxmoxOperationError(
+                f"Failed to get status for task {upid}: {exc}",
+                operation="task_status",
+            ) from exc
+
+    async def get_task_log(
+        self,
+        upid: str,
+        *,
+        limit: int = 50,
+        node: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Return the log lines of a Proxmox task by UPID."""
+        n = self._node_name(node)
+        try:
+            raw = await self._run_sync(
+                self._api.nodes(n).tasks(upid).log.get,
+                limit=limit,
+            )
+            if isinstance(raw, list):
+                return raw
+            return []
+        except Exception as exc:
+            raise ProxmoxOperationError(
+                f"Failed to get log for task {upid}: {exc}",
+                operation="task_log",
             ) from exc
 
 

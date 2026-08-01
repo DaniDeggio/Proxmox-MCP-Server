@@ -479,6 +479,314 @@ class ProvisioningService:
         """Release an IPAM reservation."""
         return self._ipam.release_ip(ip)
 
+    # ------------------------------------------------------------------
+    # Snapshot management delegates
+    # ------------------------------------------------------------------
+
+    async def create_lxc_snapshot(
+        self,
+        vmid: int,
+        name: str,
+        description: str = "",
+    ) -> dict[str, Any]:
+        """Create a snapshot of an LXC container."""
+        return await self._proxmox.create_snapshot(vmid, name, description=description)
+
+    async def list_lxc_snapshots(self, vmid: int) -> list[dict[str, Any]]:
+        """List all snapshots of an LXC container."""
+        return await self._proxmox.list_snapshots(vmid)
+
+    async def rollback_lxc_snapshot(
+        self,
+        vmid: int,
+        name: str,
+        stop_if_running: bool = True,
+    ) -> dict[str, Any]:
+        """Rollback an LXC container to a named snapshot.
+
+        If ``stop_if_running`` is True and the container is running, it will
+        be stopped before the rollback and NOT restarted automatically.
+        If ``stop_if_running`` is False and the container is running, raises
+        an error to prevent accidental data loss.
+        """
+        from proxmox_mcp_server.models.errors import SnapshotError
+
+        status = await self._proxmox.get_container_status(vmid)
+        was_running = status.get("status") == "running"
+
+        if was_running:
+            if not stop_if_running:
+                raise SnapshotError(
+                    f"Container VMID {vmid} is running. "
+                    "Set stop_if_running=True to stop it automatically before rollback.",
+                    vmid=vmid,
+                    snapshot_name=name,
+                )
+            await self._proxmox.stop_container(vmid)
+
+        result = await self._proxmox.rollback_snapshot(vmid, name)
+        result["was_running"] = was_running
+        return result
+
+    # ------------------------------------------------------------------
+    # Command execution & diagnostics delegates
+    # ------------------------------------------------------------------
+
+    async def exec_lxc_command(
+        self,
+        vmid: int,
+        command: str,
+        timeout: int = 60,
+    ) -> dict[str, Any]:
+        """Execute a command inside a running LXC container via SSH."""
+        result = await self._proxmox.execute_command(vmid, command, timeout=timeout)
+        return {
+            "vmid": vmid,
+            "command": command,
+            "exit_code": result.exit_code,
+            "stdout": result.stdout,
+            "stderr": result.stderr,
+            "duration_seconds": result.duration_seconds,
+        }
+
+    async def get_lxc_service_logs(
+        self,
+        vmid: int,
+        service_name: str,
+        lines: int = 50,
+    ) -> dict[str, Any]:
+        """Read systemd journal logs for a service running inside a container."""
+        command = f"journalctl -u {service_name} -n {lines} --no-pager 2>&1"
+        result = await self._proxmox.execute_command(vmid, command, timeout=30)
+        return {
+            "vmid": vmid,
+            "service_name": service_name,
+            "logs": result.stdout or result.stderr,
+            "exit_code": result.exit_code,
+        }
+
+    # ------------------------------------------------------------------
+    # Infrastructure inspection delegates
+    # ------------------------------------------------------------------
+
+    async def list_containers(self) -> list[dict[str, Any]]:
+        """List all LXC containers on the configured Proxmox node."""
+        return await self._proxmox.list_containers()
+
+    async def get_storage_status(self, storage: str = "local-lvm") -> dict[str, Any]:
+        """Return usage statistics for a Proxmox storage pool."""
+        return await self._proxmox.get_storage_status(storage)
+
+    # ------------------------------------------------------------------
+    # Resource management delegates
+    # ------------------------------------------------------------------
+
+    async def resize_lxc_disk(
+        self,
+        vmid: int,
+        size_gb: int,
+        disk: str = "rootfs",
+    ) -> dict[str, Any]:
+        """Grow an LXC container disk to the specified size in GB.
+
+        Raises ValueError if size_gb is not a positive integer.
+        Note: Proxmox does not allow shrinking disks.
+        """
+        if size_gb <= 0:
+            raise ValueError(f"size_gb must be a positive integer, got {size_gb}")
+        return await self._proxmox.resize_disk(vmid, size_gb, disk=disk)
+
+    async def update_lxc_resources(
+        self,
+        vmid: int,
+        cores: int | None = None,
+        memory_mb: int | None = None,
+        swap_mb: int | None = None,
+    ) -> dict[str, Any]:
+        """Update CPU, memory, and swap resources for an LXC container.
+
+        Changes take effect immediately without requiring a container restart
+        (Proxmox supports hot-plug for CPU and memory on LXC).
+        """
+        params: dict[str, Any] = {}
+        if cores is not None:
+            params["cores"] = cores
+        if memory_mb is not None:
+            params["memory_mb"] = memory_mb
+        if swap_mb is not None:
+            params["swap_mb"] = swap_mb
+
+        if not params:
+            return {"vmid": vmid, "updated_params": {}, "action": "no_change"}
+
+        result = await self._proxmox.configure_container(
+            vmid,
+            cores=cores,
+            memory_mb=memory_mb,
+        )
+        return {
+            "vmid": vmid,
+            "updated_params": params,
+            "action": "updated",
+            "configured": result.get("configured", True),
+        }
+
+    # ------------------------------------------------------------------
+    # Task tracking delegates
+    # ------------------------------------------------------------------
+
+    async def get_task_status(self, upid: str) -> dict[str, Any]:
+        """Return the current status of a Proxmox task by UPID."""
+        return await self._proxmox.get_task_status(upid)
+
+    async def get_task_log(self, upid: str, limit: int = 50) -> list[dict[str, Any]]:
+        """Return log lines for a Proxmox task by UPID."""
+        return await self._proxmox.get_task_log(upid, limit=limit)
+
+    # ------------------------------------------------------------------
+    # Brownfield adoption
+    # ------------------------------------------------------------------
+
+    async def import_existing_lxc(
+        self,
+        vmid: int,
+        service_name: str,
+        register_dns: bool = True,
+        register_proxy: bool = False,
+        forward_port: int = 80,
+        forward_scheme: str = "http",
+    ) -> dict[str, Any]:
+        """Adopt an existing LXC container into this MCP server's management.
+
+        Steps:
+        1. Verify the container exists and is running on Proxmox.
+        2. Extract its current IP from Proxmox config.
+        3. Register the IP in the local IPAM (with out_of_range flag if applicable).
+        4. Optionally add a Pi-hole DNS record.
+        5. Optionally create an NPM proxy host.
+        """
+        hostname = service_name.lower().replace(" ", "-").replace("_", "-")
+        domain = f"{hostname}.{self._config.domains.local_suffix}"
+
+        # Step 1: Verify container exists
+        status = await self._proxmox.get_container_status(vmid)
+        container_status = status.get("status", "unknown")
+
+        # Step 2: Extract current IP from Proxmox
+        ip = _extract_ip_from_status(status)
+        if not ip:
+            # Try reading raw config
+            return {
+                "vmid": vmid,
+                "error": (
+                    f"Could not determine IP for container {vmid}. "
+                    "Ensure the container is configured with a static IP."
+                ),
+                "success": False,
+            }
+
+        # Step 3: Register in IPAM (idempotent)
+        net = self._config.network
+        import ipaddress as _ipaddress
+        range_start = _ipaddress.IPv4Address(net.ip_range_start)
+        range_end = _ipaddress.IPv4Address(net.ip_range_end)
+        addr = _ipaddress.IPv4Address(ip)
+        out_of_range = not (range_start <= addr <= range_end)
+
+        existing_ip = self._ipam.find_ip_by_vmid(vmid) or self._ipam.find_ip_by_hostname(hostname)
+        if existing_ip:
+            registered_in_ipam = "already_registered"
+        else:
+            try:
+                if out_of_range:
+                    # Direct-write reservation bypassing range check
+                    from proxmox_mcp_server.services.ipam import IpReservation
+                    reservations = self._ipam._get_reservations()
+                    reservations.append(IpReservation(ip=ip, hostname=hostname, vmid=vmid))
+                    self._ipam._save_reservations(reservations)
+                    registered_in_ipam = "registered_out_of_range"
+                else:
+                    self._ipam.allocate_ip(hostname, vmid=vmid)
+                    registered_in_ipam = "registered"
+            except Exception:
+                registered_in_ipam = "registration_failed"
+
+        result: dict[str, Any] = {
+            "vmid": vmid,
+            "hostname": hostname,
+            "domain": domain,
+            "ip": ip,
+            "container_status": container_status,
+            "registered_in_ipam": registered_in_ipam,
+            "out_of_range": out_of_range,
+            "dns_action": "skipped",
+            "proxy_action": "skipped",
+            "success": True,
+        }
+
+        # Step 4: DNS
+        if register_dns:
+            try:
+                dns_result = await self._pihole.add_dns_record(domain, ip)
+                result["dns_action"] = dns_result.get("action", "done")
+            except Exception as exc:
+                result["dns_action"] = f"failed: {exc}"
+
+        # Step 5: Proxy
+        if register_proxy:
+            try:
+                proxy_result = await self._npm.create_proxy_host(
+                    domain=domain,
+                    forward_host=ip,
+                    forward_port=forward_port,
+                    forward_scheme=forward_scheme,
+                )
+                result["proxy_action"] = proxy_result.get("action", "done")
+            except Exception as exc:
+                result["proxy_action"] = f"failed: {exc}"
+
+        return result
+
+
+    # ------------------------------------------------------------------
+    # Host administration delegates
+    # ------------------------------------------------------------------
+
+    async def exec_host_command(
+        self,
+        command: str,
+        timeout: int = 60,
+    ) -> dict[str, Any]:
+        """Execute a command directly on the Proxmox host."""
+        result = await self._proxmox.execute_host_command(command, timeout=timeout)
+        return {
+            "command": command,
+            "exit_code": result.exit_code,
+            "stdout": result.stdout,
+            "stderr": result.stderr,
+            "duration_seconds": result.duration_seconds,
+        }
+
+    async def run_host_agy(
+        self,
+        prompt: str,
+        working_dir: str | None = None,
+        timeout: int = 600,
+    ) -> dict[str, Any]:
+        """Run an Agy session directly on the Proxmox host."""
+        result = await self._agy.run_on_host(
+            prompt=prompt,
+            working_dir=working_dir,
+        )
+        return {
+            "action": "run_host_agy",
+            "exit_code": result.exit_code,
+            "stdout": result.stdout,
+            "stderr": result.stderr,
+            "duration_seconds": result.duration_seconds,
+        }
+
+
 
 def _extract_ip_from_status(status: dict[str, Any]) -> str | None:
     """Best-effort IP extraction from a Proxmox container status dict."""

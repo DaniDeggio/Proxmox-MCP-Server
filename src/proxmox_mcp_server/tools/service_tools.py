@@ -12,7 +12,12 @@ import json
 from typing import TYPE_CHECKING
 
 from proxmox_mcp_server.models.service import ServiceRequest, ServiceType
-from proxmox_mcp_server.services.prompt_generator import generate_agy_prompt
+from proxmox_mcp_server.services.prompt_generator import (
+    generate_agy_prompt,
+)
+from proxmox_mcp_server.services.prompt_generator import (
+    generate_host_agy_prompt as _generate_host_agy_prompt,
+)
 
 if TYPE_CHECKING:
     from fastmcp import FastMCP
@@ -404,3 +409,367 @@ def register_tools(mcp: FastMCP, service: ProvisioningService) -> None:
 
         result = await service.create_service(request)
         return json.dumps(result.to_summary(), indent=2, default=str)
+
+    # ------------------------------------------------------------------
+    # Snapshot & Rollback tools
+    # ------------------------------------------------------------------
+
+    @mcp.tool
+    async def create_lxc_snapshot(
+        vmid: int,
+        name: str,
+        description: str = "",
+    ) -> str:
+        """Create a point-in-time snapshot of an LXC container.
+
+        Useful before running Agy bootstraps or applying major config changes
+        so the container can be rolled back instantly if something goes wrong.
+
+        Args:
+            vmid: The container VMID to snapshot.
+            name: Snapshot name (alphanumeric and dashes, e.g. 'pre-agy-bootstrap').
+            description: Optional human-readable description of the snapshot.
+
+        Returns a JSON object with vmid, snapshot_name, and action taken.
+        """
+        result = await service.create_lxc_snapshot(vmid, name, description)
+        return json.dumps(result, indent=2)
+
+    @mcp.tool
+    async def list_lxc_snapshots(vmid: int) -> str:
+        """List all snapshots of an LXC container.
+
+        Args:
+            vmid: The container VMID to query.
+
+        Returns a JSON array of snapshot objects with name, description,
+        snaptime, and parent snapshot.
+        """
+        snapshots = await service.list_lxc_snapshots(vmid)
+        return json.dumps(snapshots, indent=2, default=str)
+
+    @mcp.tool
+    async def rollback_lxc_snapshot(
+        vmid: int,
+        name: str,
+        stop_if_running: bool = True,
+    ) -> str:
+        """Rollback an LXC container to a previously created snapshot.
+
+        The container must be stopped before rollback. If stop_if_running
+        is True (default), the container is stopped automatically. The
+        container is NOT restarted after rollback — use start_container
+        to bring it back up after verifying the state.
+
+        Args:
+            vmid: The container VMID to roll back.
+            name: The snapshot name to restore.
+            stop_if_running: If True, automatically stop a running container
+                before rolling back. If False, raises an error when the
+                container is running to prevent accidental data loss.
+
+        Returns a JSON object with vmid, snapshot_name, action, and
+        whether the container was_running before rollback.
+        """
+        result = await service.rollback_lxc_snapshot(vmid, name, stop_if_running)
+        return json.dumps(result, indent=2)
+
+    # ------------------------------------------------------------------
+    # Command Execution & Diagnostics tools
+    # ------------------------------------------------------------------
+
+    @mcp.tool
+    async def exec_lxc_command(
+        vmid: int,
+        command: str,
+        timeout: int = 60,
+    ) -> str:
+        """Execute a shell command inside a running LXC container.
+
+        Connects to the container via the Proxmox SSH bridge (pct exec).
+        Requires SSH access to the Proxmox host configured in the server config.
+
+        Use this for quick diagnostics: checking process status, reading files,
+        or running one-off admin tasks. For complex multi-step setups, use
+        run_agy_bootstrap instead.
+
+        Args:
+            vmid: The container VMID to run the command in.
+            command: Shell command to execute (e.g. 'systemctl status nginx').
+            timeout: Maximum seconds to wait for the command (default 60).
+
+        Returns a JSON object with exit_code, stdout, stderr, and duration_seconds.
+        """
+        result = await service.exec_lxc_command(vmid, command, timeout)
+        return json.dumps(result, indent=2)
+
+    @mcp.tool
+    async def get_lxc_service_logs(
+        vmid: int,
+        service_name: str,
+        lines: int = 50,
+    ) -> str:
+        """Read systemd journal logs for a service running inside an LXC container.
+
+        Equivalent to running 'journalctl -u <service> -n <lines> --no-pager'
+        inside the container. Useful for diagnosing services that were deployed
+        via Agy bootstrap or manually configured.
+
+        Args:
+            vmid: The container VMID to read logs from.
+            service_name: Systemd service name (e.g. 'nginx', 'gitea', 'docker').
+            lines: Number of recent log lines to return (default 50).
+
+        Returns a JSON object with service_name, logs (as a string), and exit_code.
+        """
+        result = await service.get_lxc_service_logs(vmid, service_name, lines)
+        return json.dumps(result, indent=2)
+
+    # ------------------------------------------------------------------
+    # Infrastructure Inspection tools
+    # ------------------------------------------------------------------
+
+    @mcp.tool
+    async def list_containers() -> str:
+        """List all LXC containers on the configured Proxmox node.
+
+        Returns all containers — including those not created by this MCP server —
+        with their VMID, name, status, CPU count, memory usage, and uptime.
+
+        Useful as a pre-flight check before create_service, or as the starting
+        point for import_existing_lxc to adopt pre-existing containers.
+
+        Returns a JSON array of container objects.
+        """
+        containers = await service.list_containers()
+        return json.dumps(containers, indent=2, default=str)
+
+    @mcp.tool
+    async def get_storage_status(storage: str = "local-lvm") -> str:
+        """Check disk space usage for a Proxmox storage pool.
+
+        Use this before create_service to verify there is sufficient space
+        to clone a template. Also useful when resize_lxc_disk is needed.
+
+        Args:
+            storage: Storage pool identifier (default 'local-lvm').
+                     Common values: 'local-lvm', 'local', 'pbs-local'.
+
+        Returns a JSON object with total_gb, used_gb, avail_gb, used_pct, and type.
+        """
+        result = await service.get_storage_status(storage)
+        return json.dumps(result, indent=2)
+
+    # ------------------------------------------------------------------
+    # Resource Management tools
+    # ------------------------------------------------------------------
+
+    @mcp.tool
+    async def resize_lxc_disk(
+        vmid: int,
+        size_gb: int,
+        disk: str = "rootfs",
+    ) -> str:
+        """Grow an LXC container disk to the specified total size in GB.
+
+        Proxmox does not allow shrinking disks — only growing is supported.
+        The size_gb value is the NEW TOTAL size, not the amount to add.
+        For example, to grow a 20GB disk to 40GB, pass size_gb=40.
+
+        Changes take effect immediately; no container restart required.
+
+        Args:
+            vmid: The container VMID whose disk to resize.
+            size_gb: New total disk size in GB (must be larger than current size).
+            disk: Disk identifier (default 'rootfs').
+
+        Returns a JSON object with vmid, disk, new_size_gb, and action.
+        """
+        result = await service.resize_lxc_disk(vmid, size_gb, disk)
+        return json.dumps(result, indent=2)
+
+    @mcp.tool
+    async def update_lxc_resources(
+        vmid: int,
+        cores: int | None = None,
+        memory_mb: int | None = None,
+        swap_mb: int | None = None,
+    ) -> str:
+        """Update CPU cores, RAM, and swap for an LXC container.
+
+        Proxmox supports hot-plug for LXC resources — changes take effect
+        immediately without requiring a container restart.
+
+        At least one of cores, memory_mb, or swap_mb must be provided.
+
+        Args:
+            vmid: The container VMID to update.
+            cores: New number of CPU cores (e.g. 4).
+            memory_mb: New RAM allocation in megabytes (e.g. 4096 for 4GB).
+            swap_mb: New swap allocation in megabytes (e.g. 512).
+
+        Returns a JSON object with vmid, updated_params, and action.
+        """
+        result = await service.update_lxc_resources(vmid, cores, memory_mb, swap_mb)
+        return json.dumps(result, indent=2)
+
+    # ------------------------------------------------------------------
+    # Task Tracking tools
+    # ------------------------------------------------------------------
+
+    @mcp.tool
+    async def get_task_status(upid: str) -> str:
+        """Get the current status of a Proxmox asynchronous task by UPID.
+
+        Proxmox returns a UPID (Unique Process ID) string for long-running
+        operations like large clones or template downloads. Use this tool
+        to check if the task is still running or has completed.
+
+        Args:
+            upid: Proxmox task UPID string (e.g. 'UPID:pve:...:vzdump::root@pam:').
+
+        Returns a JSON object with status ('running' or 'stopped'),
+        exitstatus ('OK' or error string), starttime, node, and type.
+        """
+        result = await service.get_task_status(upid)
+        return json.dumps(result, indent=2, default=str)
+
+    @mcp.tool
+    async def get_task_log(upid: str, limit: int = 50) -> str:
+        """Get the log output of a Proxmox task by UPID.
+
+        Returns structured log lines from the task execution. Useful for
+        diagnosing why a task failed or inspecting its progress.
+
+        Args:
+            upid: Proxmox task UPID string.
+            limit: Maximum number of log lines to return (default 50).
+
+        Returns a JSON array of log line objects with line number (n) and text (t).
+        """
+        log_lines = await service.get_task_log(upid, limit)
+        return json.dumps(log_lines, indent=2, default=str)
+
+    # ------------------------------------------------------------------
+    # Brownfield Adoption tools
+    # ------------------------------------------------------------------
+
+    @mcp.tool
+    async def import_existing_lxc(
+        vmid: int,
+        service_name: str,
+        register_dns: bool = True,
+        register_proxy: bool = False,
+        forward_port: int = 80,
+        forward_scheme: str = "http",
+    ) -> str:
+        """Adopt an existing LXC container into this MCP server's management.
+
+        Use this for containers that were created manually or outside of this
+        MCP server's create_service workflow. After import, the container is
+        tracked in the local IPAM and optionally registered in Pi-hole DNS
+        and Nginx Proxy Manager.
+
+        The container's current IP is read from its Proxmox configuration.
+        If the IP is outside the configured IPAM range, it is still registered
+        with an out_of_range flag so it can be managed without conflicts.
+
+        Args:
+            vmid: VMID of the existing LXC container to adopt.
+            service_name: Name for the service (used for hostname and domain).
+            register_dns: Add a Pi-hole DNS record (default True).
+            register_proxy: Create an NPM reverse proxy host (default False).
+            forward_port: Service port for the proxy host (default 80).
+            forward_scheme: Proxy forward scheme, 'http' or 'https' (default 'http').
+
+        Returns a JSON object with vmid, hostname, domain, ip, container_status,
+        registered_in_ipam, out_of_range, dns_action, and proxy_action.
+        """
+        result = await service.import_existing_lxc(
+            vmid=vmid,
+            service_name=service_name,
+            register_dns=register_dns,
+            register_proxy=register_proxy,
+            forward_port=forward_port,
+            forward_scheme=forward_scheme,
+        )
+        return json.dumps(result, indent=2, default=str)
+
+    # ------------------------------------------------------------------
+    # Proxmox Host Operations tools
+    # ------------------------------------------------------------------
+
+    @mcp.tool
+    async def exec_host_command(
+        command: str,
+        timeout: int = 60,
+    ) -> str:
+        """Execute a command directly on the Proxmox host (not inside a container).
+
+        Runs a shell command directly on the Proxmox VE hypervisor host via SSH.
+        Use this for host-level diagnostics, checking storage pools (zpool, lvm),
+        inspecting cluster status (pvecm), or one-off host administration tasks.
+
+        Args:
+            command: Shell command to execute on the Proxmox host.
+            timeout: Maximum seconds to wait for the command (default 60).
+
+        Returns a JSON object with command, exit_code, stdout, stderr, and duration_seconds.
+        """
+        result = await service.exec_host_command(command, timeout)
+        return json.dumps(result, indent=2)
+
+    @mcp.tool
+    async def run_host_agy(
+        prompt: str,
+        working_dir: str = "/root",
+        timeout: int = 600,
+    ) -> str:
+        """Run an Agy session directly on the Proxmox host for host-level administration.
+
+        Executes the Agy AI agent on the Proxmox VE host machine via SSH.
+        Use this for complex host administration tasks such as configuring ZFS datasets,
+        managing custom LXC templates, network configuration, or system maintenance.
+
+        CAUTION: The Proxmox host is critical infrastructure. Ensure prompts are safety-aware
+        or generate them using generate_host_agy_prompt first.
+
+        Args:
+            prompt: The task instruction prompt for Agy.
+            working_dir: Working directory on the Proxmox host (default: /root).
+            timeout: Maximum seconds to wait for Agy to complete (default 600).
+
+        Returns a JSON object with action, exit_code, stdout, stderr, and duration_seconds.
+        """
+        result = await service.run_host_agy(prompt, working_dir, timeout)
+        return json.dumps(result, indent=2)
+
+    @mcp.tool
+    async def generate_host_agy_prompt(
+        task_description: str,
+        task_category: str = "maintenance",
+        extra_requirements: str = "",
+        docs_urls: list[str] | None = None,
+    ) -> str:
+        """Generate a safety-aware Agy prompt for Proxmox host operations.
+
+        Creates a structured prompt tailored for running Agy directly on the Proxmox
+        hypervisor host, including explicit safety rules and guardrails (e.g. avoiding
+        accidental removal of Proxmox core packages or direct /etc/pve modifications).
+
+        Args:
+            task_description: Description of the host administration task.
+            task_category: Category: maintenance, template, storage, network, custom (default: maintenance).
+            extra_requirements: Additional constraints or instructions.
+            docs_urls: Optional reference documentation URLs.
+
+        Returns a formatted multi-line markdown prompt ready to pass to run_host_agy.
+        """
+        prompt = _generate_host_agy_prompt(
+            task_description=task_description,
+            task_category=task_category,
+            extra_requirements=extra_requirements,
+            docs_urls=docs_urls,
+        )
+        return prompt
+

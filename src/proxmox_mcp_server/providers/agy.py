@@ -98,3 +98,60 @@ class AgyProvider(BaseAgentProvider):
             duration=result.duration_seconds,
         )
         return result
+
+    async def run_on_host(
+        self,
+        prompt: str,
+        *,
+        working_dir: str | None = None,
+    ) -> CommandResult:
+        """Execute an Agy session directly on the Proxmox host."""
+        wd = working_dir or self._config.working_dir or "/root"
+        agy_cmd = self._config.command
+
+        skip_flag = " --dangerously-skip-permissions" if self._config.skip_permissions else ""
+        full_command = (
+            f"cd {wd} && "
+            f"cat <<'AGYPROMPT_EOF' > /tmp/agy_host_prompt.txt\n"
+            f"{prompt}\n"
+            f"AGYPROMPT_EOF\n"
+            f"{agy_cmd} --prompt-file /tmp/agy_host_prompt.txt{skip_flag}"
+        )
+
+        log.info(
+            "agy_host_starting",
+            working_dir=wd,
+            prompt_length=len(prompt),
+        )
+
+        try:
+            result = await self._proxmox.execute_host_command(
+                full_command,
+                timeout=self._config.timeout_seconds,
+            )
+        except Exception as exc:
+            raise AgentExecutionError(
+                f"Agy host execution failed: {exc}",
+            ) from exc
+
+        if result.exit_code != 0:
+            log.warning(
+                "agy_host_nonzero_exit",
+                exit_code=result.exit_code,
+                stderr=result.stderr[:500],
+            )
+            raise AgentExecutionError(
+                f"Agy exited with code {result.exit_code} on Proxmox host",
+                exit_code=result.exit_code,
+                details={
+                    "stdout": result.stdout[:2000],
+                    "stderr": result.stderr[:2000],
+                },
+            )
+
+        log.info(
+            "agy_host_completed",
+            duration=result.duration_seconds,
+        )
+        return result
+
