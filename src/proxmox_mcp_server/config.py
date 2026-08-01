@@ -133,11 +133,25 @@ class AppSettings(BaseModel):
     log_level: str = "INFO"
     log_format: str = "console"
     state_dir: str = "state"
+    transport: str = "stdio"
+    host: str = "127.0.0.1"
+    port: int = 8000
 
     @field_validator("log_level")
     @classmethod
     def _normalise_log_level(cls, v: str) -> str:
         return v.upper()
+
+    @field_validator("transport")
+    @classmethod
+    def _normalise_transport(cls, v: str) -> str:
+        v = v.lower()
+        if v not in {"stdio", "http", "sse", "streamable-http"}:
+            raise ValueError(
+                f"Unknown transport: {v}. Must be one of stdio, http, sse, streamable-http"
+            )
+        return v
+
 
 
 # ---------------------------------------------------------------------------

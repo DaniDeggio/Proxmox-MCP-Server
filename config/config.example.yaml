@@ -95,3 +95,7 @@ app:
   log_level: "INFO"
   log_format: "console"  # "console" or "json"
   state_dir: "state"
+  transport: "stdio"     # "stdio", "http", "sse", or "streamable-http" (HTTP streaming)
+  host: "127.0.0.1"      # Host interface for HTTP/SSE server (e.g. "0.0.0.0")
+  port: 8000             # Port for HTTP/SSE server
+

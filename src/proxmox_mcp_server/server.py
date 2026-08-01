@@ -7,6 +7,7 @@ so HTTP/streamable transport can be added with minimal changes.
 
 from __future__ import annotations
 
+import argparse
 import sys
 
 from fastmcp import FastMCP
@@ -75,16 +76,54 @@ def build_server(config: AppConfig | None = None) -> FastMCP:
         "server_ready",
         templates=len(config.list_templates()),
         ip_range=f"{config.network.ip_range_start}–{config.network.ip_range_end}",
+        transport=config.app.transport,
     )
 
     return mcp
 
 
+def parse_args() -> argparse.Namespace:
+    """Parse command-line arguments for server configuration and transport."""
+    parser = argparse.ArgumentParser(description="Proxmox MCP Server")
+    parser.add_argument(
+        "--config",
+        "-c",
+        help="Path to configuration YAML file",
+    )
+    parser.add_argument(
+        "--transport",
+        "-t",
+        choices=["stdio", "http", "sse", "streamable-http"],
+        help="Transport protocol to use (default: from config or stdio)",
+    )
+    parser.add_argument(
+        "--host",
+        help="Host interface to bind HTTP/SSE server (default: 127.0.0.1)",
+    )
+    parser.add_argument(
+        "--port",
+        "-p",
+        type=int,
+        help="Port for HTTP/SSE server (default: 8000)",
+    )
+    return parser.parse_args()
+
+
 def main() -> None:
-    """CLI entry point — runs the MCP server over stdio."""
+    """CLI entry point — runs the MCP server over stdio or HTTP streaming."""
+    args = parse_args()
     try:
-        mcp = build_server()
-        mcp.run(transport="stdio")
+        config = load_config(args.config) if args.config else load_config()
+        mcp = build_server(config)
+
+        transport = args.transport or config.app.transport or "stdio"
+        host = args.host or config.app.host or "127.0.0.1"
+        port = args.port or config.app.port or 8000
+
+        if transport == "stdio":
+            mcp.run(transport="stdio")
+        else:
+            mcp.run(transport=transport, host=host, port=port)
     except KeyboardInterrupt:
         sys.exit(0)
     except Exception as exc:
@@ -94,3 +133,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
