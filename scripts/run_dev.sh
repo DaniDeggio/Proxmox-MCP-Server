@@ -24,8 +24,9 @@ echo "Log level: $PROXMOX_MCP_LOG_LEVEL"
 # Run the MCP server
 if command -v uv &>/dev/null; then
     echo "Running with uv..."
-    uv run proxmox-mcp-server
+    uv run proxmox-mcp-server "$@"
 else
     echo "Running with Python..."
-    python -m proxmox_mcp_server.server
+    python -m proxmox_mcp_server.server "$@"
 fi
+

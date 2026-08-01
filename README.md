@@ -4,19 +4,20 @@
 
 **proxmox-mcp-server** is a production-ready [Model Context Protocol](https://modelcontextprotocol.io/) (MCP) server that orchestrates end-to-end service provisioning in a Proxmox-based homelab. It combines:
 
-- **Proxmox LXC management** — clone templates, configure networking & tags, start/stop containers
+- **Proxmox LXC & Host management** — clone templates, configure networking, start/stop containers, and execute direct host diagnostics
 - **Pi-hole DNS automation** — automatic local DNS record creation and management
 - **Nginx Proxy Manager** — automated reverse proxy host setup
-- **Coding Agent Bootstrap (Agy)** — AI-driven service setup inside containers using Google Antigravity CLI
+- **Coding Agent Integration (Agy)** — AI-driven service setup inside LXC containers AND direct Proxmox host administration with built-in safety guardrails
 - **Full orchestration** — one `create_service` tool that handles the entire pipeline
 
 ## Architecture
 
 ```
 ┌─────────────────────────────────────────────┐
-│           MCP Transport (stdio)             │
+│    MCP Transport (stdio / HTTP Streaming)   │
 │         FastMCP · server.py                 │
 ├─────────────────────────────────────────────┤
+
 │             MCP Tools Layer                 │
 │       tools/service_tools.py                │
 │    (validate → call service → respond)      │
@@ -185,10 +186,19 @@ When `create_service` runs an Agy bootstrap step, it executes Agy in headless/pr
 
 If your Agy workflows require authentication in headless server environments, make sure `ANTIGRAVITY_API_KEY` is configured in your template's environment.
 
+### Host-Level Administration
+In addition to inside-LXC bootstrap, Agy can be executed directly on the **Proxmox VE hypervisor host** via SSH (`run_host_agy`) for complex host tasks such as configuring ZFS datasets, managing LXC templates, or setting up bridge networking.
+
+To ensure safety when operating on critical hypervisor infrastructure, use `generate_host_agy_prompt` to generate prompts equipped with explicit guardrails:
+- Prevents removal of Proxmox/Ceph/Corosync packages (`proxmox-*`, `pve-*`, `ceph-*`, `corosync`).
+- Protects `/etc/pve/` configurations from direct modification.
+- Requires automatic timestamped backups before modifying config files.
+
 ### Supporting Other Agents
 The agent integration is abstracted behind `BaseAgentProvider`. While Agy (`AgyProvider`) is currently the supported default, the architecture makes it straightforward to integrate other CLI agents in the future (such as OpenCode or Claude Code) by implementing the `BaseAgentProvider` interface.
 
 ## Running
+
 
 ### Development
 
@@ -224,28 +234,56 @@ Configure your MCP client (Claude Desktop, Cursor, etc.):
 }
 ```
 
+### As an MCP Server (HTTP Streaming / SSE)
+You can run the server over HTTP streaming (`streamable-http`, `sse`, `http`) by specifying CLI flags or setting the `transport` option in `config/config.yaml`:
+
+```bash
+# Start with Streamable HTTP on 0.0.0.0:8000
+uv run proxmox-mcp-server --transport streamable-http --host 0.0.0.0 --port 8000
+
+# Start with Server-Sent Events (SSE)
+uv run proxmox-mcp-server --transport sse --port 8000
+```
+
 ## MCP Tools
 
-| Tool | Description |
-|------|-------------|
-| `list_templates()` | List configured LXC templates |
-| `allocate_ip(hostname)` | Get next free IP from range |
-| `create_lxc_from_template(template_key, hostname, ip)` | Clone + configure a container |
-| `start_container(vmid)` | Start an LXC container |
-| `stop_container(vmid)` | Stop an LXC container |
-| `get_container_status(vmid)` | Query status of a container |
-| `wait_for_container(vmid)` | Wait until SSH is reachable |
-| `list_ip_reservations()` | List all IPAM reservations |
-| `release_ip(ip)` | Release an allocated IP address |
-| `add_pihole_dns_record(domain, ip)` | Create Pi-hole DNS record |
-| `delete_pihole_dns_record(domain, ip)` | Delete a Pi-hole DNS record |
-| `list_pihole_dns_records()` | List custom DNS records in Pi-hole |
-| `create_npm_proxy_host(domain, host, port)` | Create NPM proxy host |
-| `delete_npm_proxy_host(host_id)` | Delete an NPM proxy host by ID |
-| `list_npm_proxy_hosts()` | List all configured proxy hosts |
-| `run_agy_bootstrap(vmid, prompt)` | Execute Agy inside container |
-| `generate_agy_prompt(name, type, ...)` | Build a bootstrap prompt |
-| **`create_service(...)`** | **Full orchestration flow** |
+
+| Tool | Description | Category |
+|------|-------------|----------|
+| **`create_service(...)`** | **Full end-to-end orchestration flow** | Orchestration |
+| `list_templates()` | List configured LXC templates | Provisioning |
+| `create_lxc_from_template(template_key, ...)` | Clone + configure a new LXC container | Provisioning |
+| `import_existing_lxc(vmid, ...)` | Adopt an existing LXC container into MCP management | Provisioning |
+| `list_containers()` | List all managed containers | Operations |
+| `start_container(vmid)` | Start an LXC container | Operations |
+| `stop_container(vmid)` | Stop an LXC container | Operations |
+| `get_container_status(vmid)` | Query status and resource usage of a container | Operations |
+| `wait_for_container(vmid)` | Wait until SSH is reachable inside container | Operations |
+| `exec_lxc_command(vmid, command)` | Execute a shell command inside an LXC container | Diagnostics |
+| `get_lxc_service_logs(vmid, service_name)` | Fetch systemd journal logs from a container | Diagnostics |
+| `get_storage_status()` | Check Proxmox storage pool usage and availability | Infrastructure |
+| `resize_lxc_disk(vmid, disk, size)` | Resize an LXC container disk volume | Infrastructure |
+| `update_lxc_resources(vmid, cores, memory_mb)` | Adjust CPU/memory resources for a container | Infrastructure |
+| `get_task_status(upid)` | Check status of an asynchronous Proxmox task | Infrastructure |
+| `get_task_log(upid)` | Read log output of a Proxmox UPID task | Infrastructure |
+| `create_lxc_snapshot(vmid, name)` | Create a snapshot of an LXC container | Snapshots |
+| `list_lxc_snapshots(vmid)` | List all snapshots for an LXC container | Snapshots |
+| `rollback_lxc_snapshot(vmid, name)` | Roll back an LXC container to a snapshot | Snapshots |
+| `allocate_ip(hostname)` | Get next free IP address from range | IPAM |
+| `list_ip_reservations()` | List all IPAM reservations | IPAM |
+| `release_ip(ip)` | Release an allocated IP address | IPAM |
+| `add_pihole_dns_record(domain, ip)` | Create local Pi-hole DNS record | DNS |
+| `delete_pihole_dns_record(domain, ip)` | Delete a Pi-hole DNS record | DNS |
+| `list_pihole_dns_records()` | List custom DNS records in Pi-hole | DNS |
+| `create_npm_proxy_host(domain, host, port)` | Create reverse proxy host in Nginx Proxy Manager | Proxy |
+| `list_npm_proxy_hosts()` | List all configured proxy hosts in NPM | Proxy |
+| `delete_npm_proxy_host(host_id)` | Delete an NPM proxy host by ID | Proxy |
+| `run_agy_bootstrap(vmid, prompt)` | Execute Agy coding agent inside LXC container | Agent (LXC) |
+| `generate_agy_prompt_tool(...)` | Build a bootstrap prompt for container setup | Agent (LXC) |
+| `exec_host_command(command)` | Execute command directly on Proxmox VE host | Agent (Host) |
+| `run_host_agy(prompt)` | Execute Agy directly on Proxmox VE hypervisor host | Agent (Host) |
+| `generate_host_agy_prompt(...)` | Build a safety-guarded prompt for host administration | Agent (Host) |
+
 
 ### Example: create_service
 
@@ -327,14 +365,16 @@ uv run mypy src/proxmox_mcp_server/
 
 - **Never commit `.env` or `config/config.yaml`** — they contain secrets
 - Use Proxmox API tokens with **minimal permissions** (not root)
-- The MCP server runs over **stdio** — it does not listen on any port
+- The MCP server defaults to **stdio** (no open ports), but supports optional **HTTP streaming** with configurable host/port bindings
 - Pi-hole and NPM credentials are per-session and not persisted
 - File-based IPAM state uses file locking for safety
 - The systemd unit includes hardening (`NoNewPrivileges`, `ProtectSystem`, `ProtectHome`)
+- Host-level Agy prompts include explicit guardrails to protect Proxmox core packages and `/etc/pve/` configurations
 
 ## Roadmap
 
-- [ ] HTTP/Streamable transport support
+- [x] HTTP/Streamable transport support (`streamable-http`, `sse`, `http`)
+- [x] Host-level Agy administration with safety guardrails
 - [ ] SQLite-backed state instead of JSON files
 - [ ] Container health-check beyond SSH port
 - [ ] Template auto-discovery from Proxmox
@@ -346,3 +386,4 @@ uv run mypy src/proxmox_mcp_server/
 ## License
 
 MIT
+

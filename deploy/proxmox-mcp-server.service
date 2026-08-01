@@ -12,8 +12,9 @@ WorkingDirectory=/opt/proxmox-mcp-server
 EnvironmentFile=/opt/proxmox-mcp-server/.env
 Environment=PROXMOX_MCP_CONFIG=/opt/proxmox-mcp-server/config/config.yaml
 
-# Run from the virtual environment
+# Run from the virtual environment (add --transport sse --host 0.0.0.0 --port 8000 for HTTP streaming)
 ExecStart=/opt/proxmox-mcp-server/.venv/bin/proxmox-mcp-server
+
 
 # Restart policy
 Restart=on-failure
