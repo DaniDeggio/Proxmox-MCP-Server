@@ -1,15 +1,4 @@
-"""Proxmox provider — uses ``proxmoxer`` directly (same library ProxmoxMCP-Plus
-wraps) for LXC container operations.
-
-Integration notes
------------------
-ProxmoxMCP-Plus is *not* imported as a library.  Its internal modules are
-tightly coupled to their own config loader and MCP transport.  Using
-``proxmoxer`` directly gives us the same Proxmox REST-API surface with
-zero version coupling.
-
-If you later run ProxmoxMCP-Plus as a *separate* MCP server alongside this
-one, they will coexist without conflict — both use Proxmox API tokens.
+"""Proxmox provider — uses ``proxmoxer`` directly for LXC container operations.
 """
 
 from __future__ import annotations

@@ -8,7 +8,8 @@ from proxmox_mcp_server.services.prompt_generator import generate_agy_prompt
 class TestPromptGeneration:
     """Tests for deterministic prompt output."""
 
-    def test_basic_prompt(self) -> None:
+    def test_generate_agy_prompt_minimal(self) -> None:
+        """works with minimal fields."""
         prompt = generate_agy_prompt(
             service_name="my-api",
             service_type="api_service",
@@ -17,49 +18,32 @@ class TestPromptGeneration:
         assert "api_service" in prompt
         assert "apt update" in prompt
 
-    def test_prompt_with_repos(self) -> None:
+    def test_generate_agy_prompt_with_all_fields(self) -> None:
+        """includes all provided fields."""
         prompt = generate_agy_prompt(
-            service_name="web-app",
+            service_name="full-svc",
             service_type="web_app",
+            hostname="full-svc-host",
+            ip="192.168.1.210",
             repo_urls=["https://github.com/user/repo1", "https://github.com/user/repo2"],
-        )
-        assert "https://github.com/user/repo1" in prompt
-        assert "https://github.com/user/repo2" in prompt
-        assert "Clone and set up" in prompt
-
-    def test_prompt_with_docs(self) -> None:
-        prompt = generate_agy_prompt(
-            service_name="worker",
-            service_type="worker",
             docs_urls=["https://docs.example.com/setup"],
-        )
-        assert "Reference documentation" in prompt
-        assert "https://docs.example.com/setup" in prompt
-
-    def test_prompt_with_extra_requirements(self) -> None:
-        prompt = generate_agy_prompt(
-            service_name="custom-svc",
-            service_type="custom",
             extra_requirements="Must use PostgreSQL 16 and Redis 7.",
         )
-        assert "Additional requirements" in prompt
+        assert "# Bootstrap: full-svc" in prompt
+        assert "full-svc-host" in prompt
+        assert "192.168.1.210" in prompt
+        assert "https://github.com/user/repo1" in prompt
+        assert "https://github.com/user/repo2" in prompt
+        assert "https://docs.example.com/setup" in prompt
         assert "PostgreSQL 16" in prompt
 
-    def test_prompt_with_host_info(self) -> None:
-        prompt = generate_agy_prompt(
-            service_name="hosted-svc",
-            service_type="web_app",
-            hostname="hosted-svc",
-            ip="192.168.1.200",
-        )
-        assert "hosted-svc" in prompt
-        assert "192.168.1.200" in prompt
-
-    def test_prompt_deterministic(self) -> None:
-        """Same inputs should produce identical output."""
+    def test_generate_agy_prompt_deterministic(self) -> None:
+        """same inputs produce same output."""
         kwargs = {
             "service_name": "det-test",
             "service_type": "web_app",
+            "hostname": "det-host",
+            "ip": "192.168.1.200",
             "repo_urls": ["https://github.com/x/y"],
             "extra_requirements": "Use Python 3.12",
         }

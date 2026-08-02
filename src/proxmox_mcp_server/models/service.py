@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import StrEnum
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -37,25 +38,38 @@ class StepResult(BaseModel):
     message: str = ""
     started_at: datetime | None = None
     completed_at: datetime | None = None
-    data: dict | None = None
+    data: dict[str, Any] | None = None
 
     def mark_running(self) -> None:
         self.status = StepStatus.RUNNING
         self.started_at = datetime.now()
 
-    def mark_completed(self, message: str = "", data: dict | None = None) -> None:
+    def mark_completed(self, message: str = "", data: dict[str, Any] | None = None) -> None:
         self.status = StepStatus.COMPLETED
         self.message = message
         self.completed_at = datetime.now()
         if data:
             self.data = data
 
-    def mark_failed(self, message: str, data: dict | None = None) -> None:
+    def mark_failed(self, message: str, data: dict[str, Any] | None = None) -> None:
         self.status = StepStatus.FAILED
         self.message = message
         self.completed_at = datetime.now()
         if data:
             self.data = data
+
+
+class CreateServiceDryRunResult(BaseModel):
+    """Result object returned when create_service is executed in dry-run mode."""
+
+    validation_passed: bool = True
+    allocated_ip_would_be: str | None = None
+    vmid_would_be: int | None = None
+    dns_record_would_be_created: bool = False
+    npm_proxy_would_be_created: bool = False
+    aggy_bootstrap_would_run: bool = False
+    warnings: list[str] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
 
 
 class ServiceRequest(BaseModel):
@@ -77,6 +91,7 @@ class ServiceRequest(BaseModel):
     skip_dns: bool = Field(default=False, description="Skip Pi-hole DNS record creation")
     skip_proxy: bool = Field(default=False, description="Skip NPM proxy host creation")
     skip_agy: bool = Field(default=False, description="Skip Agy bootstrap execution")
+    dry_run: bool = Field(default=False, description="Validate inputs and dependencies without modifying state")
 
 
 class ServiceResult(BaseModel):
@@ -95,14 +110,19 @@ class ServiceResult(BaseModel):
     error_message: str | None = None
     started_at: datetime | None = None
     completed_at: datetime | None = None
+    rollback_performed: bool = False
+    manual_cleanup_required: bool = False
+    partial_resources: dict[str, Any] = Field(default_factory=dict)
+    stage_durations: dict[str, float] = Field(default_factory=dict)
+    dry_run_result: CreateServiceDryRunResult | None = None
 
     @property
     def completed_steps(self) -> list[str]:
         return [s.name for s in self.steps if s.status == StepStatus.COMPLETED]
 
-    def to_summary(self) -> dict:
+    def to_summary(self) -> dict[str, Any]:
         """Return a concise dict for MCP tool response."""
-        return {
+        res: dict[str, Any] = {
             "success": self.success,
             "correlation_id": self.correlation_id,
             "vmid": self.vmid,
@@ -114,7 +134,14 @@ class ServiceResult(BaseModel):
             "completed_steps": self.completed_steps,
             "failure_point": self.failure_point,
             "error_message": self.error_message,
+            "rollback_performed": self.rollback_performed,
+            "manual_cleanup_required": self.manual_cleanup_required,
+            "partial_resources": self.partial_resources,
+            "stage_durations": self.stage_durations,
         }
+        if self.dry_run_result:
+            res["dry_run_result"] = self.dry_run_result.model_dump()
+        return res
 
 
 class CommandResult(BaseModel):

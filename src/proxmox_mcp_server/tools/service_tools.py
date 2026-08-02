@@ -357,6 +357,7 @@ def register_tools(mcp: FastMCP, service: ProvisioningService) -> None:
         skip_dns: bool = False,
         skip_proxy: bool = False,
         skip_agy: bool = False,
+        dry_run: bool = False,
     ) -> str:
         """Create a new service — full orchestration flow.
 
@@ -390,6 +391,7 @@ def register_tools(mcp: FastMCP, service: ProvisioningService) -> None:
             skip_dns: Skip Pi-hole DNS record creation.
             skip_proxy: Skip NPM proxy host creation.
             skip_agy: Skip Agy bootstrap execution.
+            dry_run: Validate parameters and external dependencies without modifying state.
         """
         request = ServiceRequest(
             service_name=service_name,
@@ -405,10 +407,44 @@ def register_tools(mcp: FastMCP, service: ProvisioningService) -> None:
             skip_dns=skip_dns,
             skip_proxy=skip_proxy,
             skip_agy=skip_agy,
+            dry_run=dry_run,
         )
 
         result = await service.create_service(request)
         return json.dumps(result.to_summary(), indent=2, default=str)
+
+    @mcp.tool
+    async def create_service_dry_run(
+        service_name: str,
+        service_type: str = "web_app",
+        template_key: str = "base",
+        vmid: int | None = None,
+        forward_port: int = 80,
+        forward_scheme: str = "http",
+        skip_dns: bool = False,
+        skip_proxy: bool = False,
+        skip_agy: bool = False,
+    ) -> str:
+        """Perform a dry-run validation for a service provisioning request without mutating any state.
+
+        Returns a JSON object detailing IP availability, VMID assignment,
+        DNS and Proxy host creation plans, and any validation warnings or errors.
+        """
+        request = ServiceRequest(
+            service_name=service_name,
+            service_type=ServiceType(service_type),
+            template_key=template_key,
+            vmid=vmid,
+            forward_port=forward_port,
+            forward_scheme=forward_scheme,
+            skip_dns=skip_dns,
+            skip_proxy=skip_proxy,
+            skip_agy=skip_agy,
+            dry_run=True,
+        )
+
+        result = await service.create_service_dry_run(request)
+        return json.dumps(result.model_dump(), indent=2)
 
     # ------------------------------------------------------------------
     # Snapshot & Rollback tools

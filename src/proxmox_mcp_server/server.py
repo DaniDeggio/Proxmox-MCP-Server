@@ -123,7 +123,7 @@ def main() -> None:
         if transport == "stdio":
             mcp.run(transport="stdio")
         else:
-            mcp.run(transport=transport, host=host, port=port)
+            mcp.run(transport=transport, host=host, port=port)  # type: ignore[arg-type]
     except KeyboardInterrupt:
         sys.exit(0)
     except Exception as exc:

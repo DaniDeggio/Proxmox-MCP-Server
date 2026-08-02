@@ -131,10 +131,22 @@ class PiHoleProvider(BasePiHoleProvider):
         )
 
     async def add_dns_record(self, domain: str, target_ip: str) -> dict[str, Any]:
-        # Idempotency: check first
-        if await self.record_exists(domain, target_ip):
-            log.info("pihole_record_exists", domain=domain, ip=target_ip)
-            return {"domain": domain, "ip": target_ip, "action": "already_exists"}
+        # Idempotency & conflict check
+        records = await self.get_dns_records()
+        for r in records:
+            if r.get("domain") == domain:
+                if r.get("ip") == target_ip:
+                    log.info("pihole_record_exists", domain=domain, ip=target_ip)
+                    return {"domain": domain, "ip": target_ip, "action": "already_exists"}
+                else:
+                    raise PiHoleError(
+                        f"DNS record for '{domain}' already exists pointing to different IP '{r.get('ip')}' (requested '{target_ip}')",
+                        operation="add_dns_record",
+                        resource_type="domain",
+                        resource_id=domain,
+                        details={"existing_ip": r.get("ip"), "requested_ip": target_ip},
+                        retryable=False,
+                    )
 
         log.info("pihole_adding_record", domain=domain, ip=target_ip)
         key = self._record_key(target_ip, domain)
@@ -147,7 +159,10 @@ class PiHoleProvider(BasePiHoleProvider):
             return {"domain": domain, "ip": target_ip, "action": "created"}
         except httpx.HTTPError as exc:
             raise PiHoleError(
-                f"Failed to add DNS record {domain} → {target_ip}: {exc}"
+                f"Failed to add DNS record {domain} → {target_ip}: {exc}",
+                operation="add_dns_record",
+                resource_type="domain",
+                resource_id=domain,
             ) from exc
 
     async def delete_dns_record(self, domain: str, target_ip: str) -> dict[str, Any]:

@@ -136,7 +136,11 @@ class NpmProvider(BaseNpmProvider):
                     f"{existing.get('forward_host')}:"
                     f"{existing.get('forward_port')}). "
                     f"Requested: {forward_scheme}://{forward_host}:{forward_port}",
+                    operation="create_proxy_host",
+                    resource_type="domain",
+                    resource_id=domain,
                     details={"existing": existing},
+                    retryable=False,
                 )
 
         log.info(

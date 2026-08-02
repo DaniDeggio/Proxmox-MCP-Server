@@ -140,6 +140,10 @@ class IpamService:
                 return r.ip
         return None
 
+    def is_ip_reserved(self, ip: str) -> bool:
+        """Check whether an IP address is currently reserved."""
+        return any(r.ip == ip for r in self._get_reservations())
+
     def allocate_ip(
         self,
         hostname: str,
@@ -173,12 +177,24 @@ class IpamService:
             if addr < self._range_start or addr > self._range_end:
                 raise IpAllocationError(
                     f"Preferred IP {preferred_ip} is outside the configured "
-                    f"range {self._range_start}–{self._range_end}"
+                    f"range {self._range_start}–{self._range_end}",
+                    operation="allocate_ip",
+                    resource_type="ip",
+                    resource_id=preferred_ip,
                 )
-            if preferred_ip in reserved_ips:
-                raise IpAllocationError(
-                    f"Preferred IP {preferred_ip} is already reserved"
-                )
+            for r in reservations:
+                if r.ip == preferred_ip:
+                    if r.hostname == hostname:
+                        log.info("ipam_preferred_already_reserved_same_host", hostname=hostname, ip=preferred_ip)
+                        return preferred_ip
+                    else:
+                        raise IpAllocationError(
+                            f"Preferred IP {preferred_ip} is already reserved by '{r.hostname}'",
+                            operation="allocate_ip",
+                            resource_type="ip",
+                            resource_id=preferred_ip,
+                            details={"existing_hostname": r.hostname, "requested_hostname": hostname},
+                        )
             allocated = preferred_ip
         else:
             # Scan the range for the first free address

@@ -297,6 +297,47 @@ Use the create_service tool:
 
 This will automatically: allocate an IP → clone the template → configure networking → start the container → wait for SSH → add DNS record (`my-web-app.homelab.local`) → create reverse proxy → run Agy to set up the service.
 
+## Error Handling, Idempotency & Rollback
+
+### Idempotency Rules
+- **IPAM (`allocate_ip`)**: If called for an existing hostname reservation, returns the existing IP. If a preferred IP is requested and matches the hostname, returns success no-op; if preferred IP is owned by another host, raises `IpAllocationError`.
+- **Pi-hole DNS (`add_pihole_dns_record`)**: If the exact record (`domain` + `target_ip`) exists, returns success no-op. If `domain` exists pointing to a different IP, raises `PiHoleError`.
+- **NPM Proxy (`create_npm_proxy_host`)**: If a proxy host exists with matching forward host, port, and scheme, returns success no-op. If settings conflict, raises `NpmError`.
+- **LXC Container (`create_lxc_from_template`)**: Validates that VMID and hostname do not collide with existing Proxmox containers before cloning.
+
+### Stage-Based Rollback Mechanism
+When `create_service()` encounters a failure mid-flow, it executes targeted rollback actions based on the stage:
+- **Stage 1 (Clone failure right after IP allocation)**: Automatically releases the allocated IP reservation (`rollback_performed: true`).
+- **Stage 2 (LXC setup / SSH readiness failure)**: Releases IP reservation; keeps LXC container for manual inspection (`manual_cleanup_required: true`).
+- **Stage 3 (NPM proxy creation failure)**: Automatically deletes the created Pi-hole DNS record, releases IP reservation, and marks LXC container as incomplete (`rollback_performed: true, manual_cleanup_required: true`).
+- **Stage 4 (Agy bootstrap failure)**: Leaves all underlying infrastructure intact (LXC container, DNS record, NPM proxy host) so the service can be inspected and Agy bootstrap retried manually.
+
+## Dry-Run Mode
+
+Perform safe pre-flight validation of your provisioning requests without mutating any infrastructure state by setting `dry_run: true` or using `create_service_dry_run`:
+
+```json
+{
+  "service_name": "my-test-app",
+  "template_key": "base",
+  "dry_run": true
+}
+```
+
+**Dry-Run Output Example:**
+```json
+{
+  "validation_passed": true,
+  "allocated_ip_would_be": "192.168.1.200",
+  "vmid_would_be": 200,
+  "dns_record_would_be_created": true,
+  "npm_proxy_would_be_created": true,
+  "aggy_bootstrap_would_run": true,
+  "warnings": [],
+  "errors": []
+}
+```
+
 ## Deployment in LXC
 
 ### 1. Prepare the LXC
@@ -348,16 +389,15 @@ sudo journalctl -u proxmox-mcp-server -f
 ## Testing
 
 ```bash
-# Run all tests
+# Using Makefile
+make check        # Runs linting and tests
+make test         # Runs pytest suite
+make test-cov     # Runs pytest with coverage report
+make lint         # Runs ruff and mypy
+
+# Or directly with uv
 uv run pytest tests/ -v
-
-# With coverage
-uv run pytest tests/ -v --cov=proxmox_mcp_server --cov-report=term-missing
-
-# Lint
 uv run ruff check src/ tests/
-
-# Type check
 uv run mypy src/proxmox_mcp_server/
 ```
 
@@ -375,10 +415,12 @@ uv run mypy src/proxmox_mcp_server/
 
 - [x] HTTP/Streamable transport support (`streamable-http`, `sse`, `http`)
 - [x] Host-level Agy administration with safety guardrails
+- [x] Rollback & partial failure cleanup mechanism
+- [x] Dry-run validation mode (`create_service_dry_run`)
+- [x] Comprehensive test suite & correlation IDs for observability
 - [ ] SQLite-backed state instead of JSON files
 - [ ] Container health-check beyond SSH port
 - [ ] Template auto-discovery from Proxmox
-- [ ] Rollback capability for partial failures
 - [ ] Pi-hole v5 compatibility adapter
 - [ ] Let's Encrypt certificate automation via NPM
 - [ ] Metrics/observability endpoint

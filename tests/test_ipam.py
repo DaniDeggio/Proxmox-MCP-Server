@@ -11,7 +11,8 @@ from proxmox_mcp_server.services.ipam import IpamService
 class TestIpamAllocation:
     """Tests for IP allocation from a configured range."""
 
-    def test_allocate_first_ip(self, ipam_service: IpamService) -> None:
+    def test_allocate_ip_success(self, ipam_service: IpamService) -> None:
+        """allocates next free IP correctly."""
         ip = ipam_service.allocate_ip("test-host-1")
         assert ip == "192.168.1.200"
 
@@ -23,12 +24,16 @@ class TestIpamAllocation:
         assert ip2 == "192.168.1.201"
         assert ip3 == "192.168.1.202"
 
-    def test_allocate_idempotent_for_hostname(self, ipam_service: IpamService) -> None:
-        """Same hostname should return the same IP without allocating a new one."""
+    def test_ipam_idempotency(self, ipam_service: IpamService) -> None:
+        """allocating same hostname twice returns existing IP without double allocation."""
         ip1 = ipam_service.allocate_ip("my-service")
         ip2 = ipam_service.allocate_ip("my-service")
         assert ip1 == ip2
         assert len(ipam_service.get_reservations()) == 1
+
+        # Preferred IP idempotency for same hostname
+        ip3 = ipam_service.allocate_ip("my-service", preferred_ip=ip1)
+        assert ip3 == ip1
 
     def test_allocate_with_vmid(self, ipam_service: IpamService) -> None:
         ip = ipam_service.allocate_ip("test-host", vmid=100)
@@ -50,8 +55,8 @@ class TestIpamAllocation:
         with pytest.raises(IpAllocationError, match="outside the configured range"):
             ipam_service.allocate_ip("bad-host", preferred_ip="10.0.0.1")
 
-    def test_allocate_exhaustion(self, ipam_service: IpamService) -> None:
-        """Range 192.168.1.200–210 has 11 IPs — the 12th should fail."""
+    def test_allocate_ip_no_available(self, ipam_service: IpamService) -> None:
+        """raises clear error when range exhausted."""
         for i in range(11):
             ipam_service.allocate_ip(f"host-{i}")
         with pytest.raises(IpAllocationError, match="exhausted"):
@@ -61,7 +66,8 @@ class TestIpamAllocation:
 class TestIpamRelease:
     """Tests for IP release."""
 
-    def test_release_existing(self, ipam_service: IpamService) -> None:
+    def test_release_ip(self, ipam_service: IpamService) -> None:
+        """releases IP and updates state."""
         ip = ipam_service.allocate_ip("temp-host")
         released = ipam_service.release_ip(ip)
         assert released is True
@@ -79,10 +85,16 @@ class TestIpamRelease:
 
 
 class TestIpamAvailability:
-    """Tests for IP availability checks."""
+    """Tests for IP availability & reservation checks."""
 
     def test_available_in_range(self, ipam_service: IpamService) -> None:
         assert ipam_service.is_ip_available("192.168.1.200") is True
+
+    def test_is_ip_reserved(self, ipam_service: IpamService) -> None:
+        """checks reservation state."""
+        assert ipam_service.is_ip_reserved("192.168.1.200") is False
+        ipam_service.allocate_ip("reserved-host")
+        assert ipam_service.is_ip_reserved("192.168.1.200") is True
 
     def test_not_available_after_allocation(self, ipam_service: IpamService) -> None:
         ipam_service.allocate_ip("taken-host")

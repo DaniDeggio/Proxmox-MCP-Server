@@ -7,6 +7,7 @@ template selection through Agy bootstrap.  Each step is tracked via
 
 from __future__ import annotations
 
+import ipaddress
 import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
@@ -14,8 +15,12 @@ from typing import TYPE_CHECKING, Any
 import structlog
 
 from proxmox_mcp_server.logging import get_logger
-from proxmox_mcp_server.models.errors import ServiceProvisioningError
+from proxmox_mcp_server.models.errors import (
+    ProxmoxOperationError,
+    ServiceProvisioningError,
+)
 from proxmox_mcp_server.models.service import (
+    CreateServiceDryRunResult,
     ServiceRequest,
     ServiceResult,
     StepResult,
@@ -70,6 +75,107 @@ class ProvisioningService:
         return self._config.get_template(key)
 
     # ------------------------------------------------------------------
+    # Dry-run validation
+    # ------------------------------------------------------------------
+
+    async def create_service_dry_run(
+        self, request: ServiceRequest
+    ) -> CreateServiceDryRunResult:
+        """Perform dry-run validation for a service provisioning request."""
+        hostname = request.service_name.lower().replace(" ", "-").replace("_", "-")
+        domain = f"{hostname}.{self._config.domains.local_suffix}"
+        dry_run = CreateServiceDryRunResult()
+
+        # 1. Validate template
+        template = self.get_template(request.template_key)
+        if not template:
+            available = [t.key for t in self.list_templates()]
+            dry_run.validation_passed = False
+            dry_run.errors.append(
+                f"Template '{request.template_key}' not found. Available: {available}"
+            )
+
+        # 2. Check IP allocation
+        existing_ip = self._ipam.find_ip_by_hostname(hostname)
+        if existing_ip:
+            dry_run.allocated_ip_would_be = existing_ip
+            dry_run.warnings.append(
+                f"Hostname '{hostname}' already has IP reservation: {existing_ip}"
+            )
+        else:
+            try:
+                reservations = self._ipam.get_reservations()
+                reserved_ips = {r["ip"] for r in reservations}
+                current = self._ipam._range_start
+                found = None
+                while current <= self._ipam._range_end:
+                    if str(current) not in reserved_ips:
+                        found = str(current)
+                        break
+                    current = ipaddress.IPv4Address(int(current) + 1)
+                if found:
+                    dry_run.allocated_ip_would_be = found
+                else:
+                    dry_run.validation_passed = False
+                    dry_run.errors.append(
+                        f"IP range exhausted ({self._ipam._range_start}–{self._ipam._range_end})"
+                    )
+            except Exception as exc:
+                dry_run.validation_passed = False
+                dry_run.errors.append(f"IP check failed: {exc}")
+
+        # 3. Check VMID / container existence
+        if request.vmid:
+            dry_run.vmid_would_be = request.vmid
+            try:
+                st = await self._proxmox.get_container_status(request.vmid)
+                if st and st.get("status") != "unknown" and st.get("vmid") == request.vmid:
+                    dry_run.validation_passed = False
+                    dry_run.errors.append(
+                        f"Container VMID {request.vmid} already exists on Proxmox"
+                    )
+            except Exception:
+                pass
+        else:
+            try:
+                dry_run.vmid_would_be = await self._proxmox.get_next_vmid()
+            except Exception as exc:
+                dry_run.warnings.append(f"Could not determine next VMID: {exc}")
+
+        # 4. Check DNS
+        if not request.skip_dns:
+            try:
+                records = await self._pihole.get_dns_records()
+                exists = any(r.get("domain") == domain for r in records)
+                if exists:
+                    dry_run.warnings.append(
+                        f"DNS record for '{domain}' already exists in Pi-hole"
+                    )
+                else:
+                    dry_run.dns_record_would_be_created = True
+            except Exception as exc:
+                dry_run.warnings.append(f"Could not check Pi-hole DNS: {exc}")
+
+        # 5. Check NPM
+        if not request.skip_proxy:
+            try:
+                existing_proxy = await self._npm.find_proxy_host_by_domain(domain)
+                if existing_proxy:
+                    dry_run.warnings.append(
+                        f"NPM proxy host for '{domain}' already exists"
+                    )
+                else:
+                    dry_run.npm_proxy_would_be_created = True
+            except Exception as exc:
+                dry_run.warnings.append(f"Could not check NPM proxy: {exc}")
+
+        # 6. Check Agy
+        if not request.skip_agy:
+            dry_run.aggy_bootstrap_would_run = True
+
+        return dry_run
+
+    # ------------------------------------------------------------------
     # Orchestration
     # ------------------------------------------------------------------
 
@@ -87,9 +193,6 @@ class ProvisioningService:
         8. Create NPM proxy host
         9. Generate Agy prompt
         10. Run Agy bootstrap
-
-        Each step is tracked independently.  If a step fails, the result
-        preserves all completed steps and the failure point.
         """
         correlation_id = str(uuid.uuid4())[:12]
         bound_log = log.bind(
@@ -97,13 +200,19 @@ class ProvisioningService:
             service_name=request.service_name,
         )
 
-        # Also bind to structlog contextvars for downstream loggers
         structlog.contextvars.bind_contextvars(correlation_id=correlation_id)
 
         result = ServiceResult(
             correlation_id=correlation_id,
             started_at=datetime.now(),
         )
+
+        if request.dry_run:
+            dry_run_res = await self.create_service_dry_run(request)
+            result.dry_run_result = dry_run_res
+            result.success = dry_run_res.validation_passed
+            result.completed_at = datetime.now()
+            return result
 
         hostname = request.service_name.lower().replace(" ", "-").replace("_", "-")
         domain = f"{hostname}.{self._config.domains.local_suffix}"
@@ -113,8 +222,17 @@ class ProvisioningService:
 
         bound_log.info("provisioning_started", domain=domain)
 
+        # Track state for potential rollback
+        ip_allocated = False
+        lxc_created = False
+        dns_created = False
+        proxy_created = False
+        ip = ""
+        vmid: int | None = None
+
         try:
             # Step 1: Validate + select template
+            t_start = datetime.now()
             step = StepResult(name="validate_template")
             result.steps.append(step)
             step.mark_running()
@@ -124,21 +242,46 @@ class ProvisioningService:
                 f"Template '{template.key}' selected (VMID {template.source_vmid})",
                 data={"source_vmid": template.source_vmid},
             )
+            result.stage_durations["validate_template"] = (
+                datetime.now() - t_start
+            ).total_seconds()
 
             # Step 2: Allocate IP
+            t_start = datetime.now()
             step = StepResult(name="allocate_ip")
             result.steps.append(step)
             step.mark_running()
             ip = self._ipam.allocate_ip(hostname, vmid=request.vmid)
+            ip_allocated = True
             result.ip = ip
             step.mark_completed(f"Allocated IP {ip}", data={"ip": ip})
+            result.stage_durations["allocate_ip"] = (
+                datetime.now() - t_start
+            ).total_seconds()
 
             # Step 3: Determine VMID and clone
+            t_start = datetime.now()
             step = StepResult(name="clone_container")
             result.steps.append(step)
             step.mark_running()
             vmid = request.vmid or await self._proxmox.get_next_vmid()
             result.vmid = vmid
+
+            # Check if VMID already exists
+            try:
+                st = await self._proxmox.get_container_status(vmid)
+                if st and st.get("status") != "unknown" and st.get("vmid") == vmid:
+                    raise ProxmoxOperationError(
+                        f"Container VMID {vmid} already exists",
+                        vmid=vmid,
+                        operation="clone_container",
+                        resource_type="vmid",
+                        resource_id=vmid,
+                    )
+            except ProxmoxOperationError:
+                raise
+            except Exception:
+                pass
 
             await self._proxmox.clone_container(
                 source_vmid=template.source_vmid,
@@ -146,17 +289,21 @@ class ProvisioningService:
                 hostname=hostname,
                 storage=template.storage,
             )
+            lxc_created = True
             step.mark_completed(
                 f"Cloned template {template.source_vmid} → VMID {vmid}",
                 data={"vmid": vmid},
             )
+            result.stage_durations["clone_container"] = (
+                datetime.now() - t_start
+            ).total_seconds()
 
             # Step 4: Configure network
+            t_start = datetime.now()
             step = StepResult(name="configure_container")
             result.steps.append(step)
             step.mark_running()
             net = self._config.network
-            # Merge template tags with request tags
             all_tags = list(template.tags) + list(request.tags)
             await self._proxmox.configure_container(
                 vmid,
@@ -173,15 +320,23 @@ class ProvisioningService:
             step.mark_completed(
                 f"Configured VMID {vmid}: {ip}/{net.cidr}, gw {net.gateway}"
             )
+            result.stage_durations["configure_container"] = (
+                datetime.now() - t_start
+            ).total_seconds()
 
             # Step 5: Start container
+            t_start = datetime.now()
             step = StepResult(name="start_container")
             result.steps.append(step)
             step.mark_running()
             await self._proxmox.start_container(vmid)
             step.mark_completed(f"Started VMID {vmid}")
+            result.stage_durations["start_container"] = (
+                datetime.now() - t_start
+            ).total_seconds()
 
             # Step 6: Wait for readiness
+            t_start = datetime.now()
             step = StepResult(name="wait_for_container")
             result.steps.append(step)
             step.mark_running()
@@ -194,20 +349,29 @@ class ProvisioningService:
                     completed_steps=result.completed_steps,
                 )
             step.mark_completed(f"Container {vmid} reachable at {ip}:22")
+            result.stage_durations["wait_for_container"] = (
+                datetime.now() - t_start
+            ).total_seconds()
 
             # Step 7: Pi-hole DNS
             if not request.skip_dns:
+                t_start = datetime.now()
                 step = StepResult(name="add_dns_record")
                 result.steps.append(step)
                 step.mark_running()
                 dns_result = await self._pihole.add_dns_record(domain, ip)
+                dns_created = True
                 step.mark_completed(
                     f"DNS: {domain} → {ip} ({dns_result.get('action', 'done')})",
                     data=dns_result,
                 )
+                result.stage_durations["add_dns_record"] = (
+                    datetime.now() - t_start
+                ).total_seconds()
 
             # Step 8: NPM proxy host
             if not request.skip_proxy:
+                t_start = datetime.now()
                 step = StepResult(name="create_npm_proxy_host")
                 result.steps.append(step)
                 step.mark_running()
@@ -217,16 +381,20 @@ class ProvisioningService:
                     forward_port=request.forward_port,
                     forward_scheme=request.forward_scheme,
                 )
+                proxy_created = True
                 proxy_target = f"{request.forward_scheme}://{ip}:{request.forward_port}"
                 result.proxy_target = proxy_target
                 step.mark_completed(
                     f"Proxy: {domain} → {proxy_target} ({proxy_result.get('action', 'done')})",
                     data=proxy_result,
                 )
+                result.stage_durations["create_npm_proxy_host"] = (
+                    datetime.now() - t_start
+                ).total_seconds()
 
             # Step 9–10: Agy bootstrap
             if not request.skip_agy:
-                # Generate prompt
+                t_start = datetime.now()
                 step = StepResult(name="generate_agy_prompt")
                 result.steps.append(step)
                 step.mark_running()
@@ -243,8 +411,11 @@ class ProvisioningService:
                     f"Generated Agy prompt ({len(prompt)} chars)",
                     data={"prompt_preview": prompt[:300]},
                 )
+                result.stage_durations["generate_agy_prompt"] = (
+                    datetime.now() - t_start
+                ).total_seconds()
 
-                # Execute bootstrap
+                t_start = datetime.now()
                 step = StepResult(name="run_agy_bootstrap")
                 result.steps.append(step)
                 step.mark_running()
@@ -261,6 +432,9 @@ class ProvisioningService:
                         "stdout_preview": agy_result.stdout[:500],
                     },
                 )
+                result.stage_durations["run_agy_bootstrap"] = (
+                    datetime.now() - t_start
+                ).total_seconds()
 
             # All done
             result.success = True
@@ -273,43 +447,139 @@ class ProvisioningService:
                 steps_completed=len(result.completed_steps),
             )
 
-        except ServiceProvisioningError:
-            result.success = False
-            result.completed_at = datetime.now()
-            raise
         except Exception as exc:
-            # Capture the failure point from the last step
             failed_steps = [
                 s for s in result.steps if s.status in (StepStatus.RUNNING, StepStatus.FAILED)
             ]
             failed_step_name = failed_steps[-1].name if failed_steps else "unknown"
 
-            # Mark any running step as failed
             for s in result.steps:
                 if s.status == StepStatus.RUNNING:
                     s.mark_failed(str(exc))
+
+            # Perform rollback / cleanup logic
+            rollback_performed, manual_cleanup_required, partial_res = await self._rollback_create_service(
+                failed_step=failed_step_name,
+                domain=domain,
+                ip=ip,
+                vmid=vmid,
+                ip_allocated=ip_allocated,
+                lxc_created=lxc_created,
+                dns_created=dns_created,
+                proxy_created=proxy_created,
+                bound_log=bound_log,
+            )
 
             result.success = False
             result.failure_point = failed_step_name
             result.error_message = str(exc)
             result.completed_at = datetime.now()
+            result.rollback_performed = rollback_performed
+            result.manual_cleanup_required = manual_cleanup_required
+            result.partial_resources = partial_res
 
             bound_log.error(
                 "provisioning_failed",
                 failed_step=failed_step_name,
                 error=str(exc),
                 completed_steps=result.completed_steps,
+                rollback_performed=rollback_performed,
+                manual_cleanup_required=manual_cleanup_required,
+                partial_resources=partial_res,
             )
+
             raise ServiceProvisioningError(
                 f"Service provisioning failed at step '{failed_step_name}': {exc}",
                 failed_step=failed_step_name,
                 completed_steps=result.completed_steps,
                 partial_result=result.to_summary(),
+                rollback_performed=rollback_performed,
+                manual_cleanup_required=manual_cleanup_required,
+                partial_resources=partial_res,
+                details={"error": str(exc)},
             ) from exc
         finally:
             structlog.contextvars.unbind_contextvars("correlation_id")
 
         return result
+
+    async def _rollback_create_service(
+        self,
+        *,
+        failed_step: str,
+        domain: str,
+        ip: str,
+        vmid: int | None,
+        ip_allocated: bool,
+        lxc_created: bool,
+        dns_created: bool,
+        proxy_created: bool,
+        bound_log: Any,
+    ) -> tuple[bool, bool, dict[str, Any]]:
+        """Perform partial failure cleanup according to provisioning stages."""
+        rollback_performed = False
+        manual_cleanup_required = False
+        partial_resources: dict[str, Any] = {}
+
+        if vmid:
+            partial_resources["vmid"] = vmid
+        if ip:
+            partial_resources["ip"] = ip
+        if domain:
+            partial_resources["domain"] = domain
+
+        # Stage 4 failure: Agy bootstrap failed. Infra is ready!
+        if failed_step == "run_agy_bootstrap":
+            bound_log.info(
+                "rollback_stage4_agy_failed_infra_kept", vmid=vmid, ip=ip, domain=domain
+            )
+            return False, False, partial_resources
+
+        # Stage 3 failure: NPM proxy host creation failed
+        if failed_step == "create_npm_proxy_host":
+            if dns_created and domain and ip:
+                try:
+                    await self._pihole.delete_dns_record(domain, ip)
+                    bound_log.info("rollback_deleted_dns_record", domain=domain, ip=ip)
+                    rollback_performed = True
+                except Exception as exc:
+                    bound_log.warning(
+                        "rollback_delete_dns_failed", domain=domain, error=str(exc)
+                    )
+            if ip_allocated and ip:
+                self._ipam.release_ip(ip)
+                bound_log.info("rollback_released_ip", ip=ip)
+                rollback_performed = True
+            if lxc_created:
+                manual_cleanup_required = True
+                bound_log.info("rollback_lxc_kept_incomplete", vmid=vmid)
+            return rollback_performed, manual_cleanup_required, partial_resources
+
+        # Stage 2 failure: DNS creation or container startup/readiness failed
+        if failed_step in (
+            "add_dns_record",
+            "wait_for_container",
+            "start_container",
+            "configure_container",
+            "clone_container",
+        ):
+            if ip_allocated and ip:
+                self._ipam.release_ip(ip)
+                bound_log.info("rollback_released_ip", ip=ip)
+                rollback_performed = True
+            if lxc_created:
+                manual_cleanup_required = True
+                bound_log.info("rollback_lxc_kept_incomplete", vmid=vmid)
+            return rollback_performed, manual_cleanup_required, partial_resources
+
+        # Stage 1 failure: Clone failed right after IP allocation
+        if ip_allocated and ip and not lxc_created:
+            self._ipam.release_ip(ip)
+            bound_log.info("rollback_released_ip", ip=ip)
+            rollback_performed = True
+            return True, False, partial_resources
+
+        return rollback_performed, manual_cleanup_required, partial_resources
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -345,11 +615,9 @@ class ProvisioningService:
     async def wait_for_container(
         self, vmid: int, timeout_seconds: int = 300
     ) -> dict[str, Any]:
-        """Wait for a container to become reachable."""
-        # Try IPAM first — it's the most reliable source
+        """Wait for a container to become reachable via SSH."""
         ip = self._ipam.find_ip_by_vmid(vmid)
 
-        # Fall back to Proxmox status
         if not ip:
             status = await self._proxmox.get_container_status(vmid)
             ip = _extract_ip_from_status(status)
@@ -361,12 +629,13 @@ class ProvisioningService:
                 "message": "Could not determine container IP from IPAM or Proxmox status",
             }
 
+        log.info("wait_for_container_checking_ssh", vmid=vmid, ip=ip, timeout=timeout_seconds)
         reachable = await wait_for_port(ip, port=22, timeout_seconds=timeout_seconds)
         return {
             "vmid": vmid,
             "ip": ip,
             "reachable": reachable,
-            "message": "Container is reachable" if reachable else "Timed out",
+            "message": "Container is reachable on SSH (port 22)" if reachable else "Timed out waiting for SSH (port 22)",
         }
 
     async def create_lxc_from_template(
@@ -380,6 +649,41 @@ class ProvisioningService:
         """Clone a template and configure the new container."""
         template = self._validate_and_select_template(template_key)
         actual_vmid = vmid or await self._proxmox.get_next_vmid()
+
+        # Check if VMID already exists
+        try:
+            st = await self._proxmox.get_container_status(actual_vmid)
+            if st and st.get("status") != "unknown" and st.get("vmid") == actual_vmid:
+                raise ProxmoxOperationError(
+                    f"Container VMID {actual_vmid} already exists",
+                    vmid=actual_vmid,
+                    operation="create_lxc_from_template",
+                    resource_type="vmid",
+                    resource_id=actual_vmid,
+                )
+        except ProxmoxOperationError:
+            raise
+        except Exception:
+            pass
+
+        # Check hostname conflict
+        try:
+            containers = await self._proxmox.list_containers()
+            for ct in containers:
+                if ct.get("name") == hostname or ct.get("hostname") == hostname:
+                    ct_vmid = ct.get("vmid")
+                    if ct_vmid and ct_vmid != actual_vmid:
+                        raise ProxmoxOperationError(
+                            f"Container hostname '{hostname}' already exists with VMID {ct_vmid}",
+                            vmid=ct_vmid,
+                            operation="create_lxc_from_template",
+                            resource_type="hostname",
+                            resource_id=hostname,
+                        )
+        except ProxmoxOperationError:
+            raise
+        except Exception:
+            pass
 
         await self._proxmox.clone_container(
             source_vmid=template.source_vmid,
@@ -502,13 +806,7 @@ class ProvisioningService:
         name: str,
         stop_if_running: bool = True,
     ) -> dict[str, Any]:
-        """Rollback an LXC container to a named snapshot.
-
-        If ``stop_if_running`` is True and the container is running, it will
-        be stopped before the rollback and NOT restarted automatically.
-        If ``stop_if_running`` is False and the container is running, raises
-        an error to prevent accidental data loss.
-        """
+        """Rollback an LXC container to a named snapshot."""
         from proxmox_mcp_server.models.errors import SnapshotError
 
         status = await self._proxmox.get_container_status(vmid)
@@ -587,11 +885,7 @@ class ProvisioningService:
         size_gb: int,
         disk: str = "rootfs",
     ) -> dict[str, Any]:
-        """Grow an LXC container disk to the specified size in GB.
-
-        Raises ValueError if size_gb is not a positive integer.
-        Note: Proxmox does not allow shrinking disks.
-        """
+        """Grow an LXC container disk to the specified size in GB."""
         if size_gb <= 0:
             raise ValueError(f"size_gb must be a positive integer, got {size_gb}")
         return await self._proxmox.resize_disk(vmid, size_gb, disk=disk)
@@ -603,11 +897,7 @@ class ProvisioningService:
         memory_mb: int | None = None,
         swap_mb: int | None = None,
     ) -> dict[str, Any]:
-        """Update CPU, memory, and swap resources for an LXC container.
-
-        Changes take effect immediately without requiring a container restart
-        (Proxmox supports hot-plug for CPU and memory on LXC).
-        """
+        """Update CPU, memory, and swap resources for an LXC container."""
         params: dict[str, Any] = {}
         if cores is not None:
             params["cores"] = cores
@@ -656,26 +946,15 @@ class ProvisioningService:
         forward_port: int = 80,
         forward_scheme: str = "http",
     ) -> dict[str, Any]:
-        """Adopt an existing LXC container into this MCP server's management.
-
-        Steps:
-        1. Verify the container exists and is running on Proxmox.
-        2. Extract its current IP from Proxmox config.
-        3. Register the IP in the local IPAM (with out_of_range flag if applicable).
-        4. Optionally add a Pi-hole DNS record.
-        5. Optionally create an NPM proxy host.
-        """
+        """Adopt an existing LXC container into this MCP server's management."""
         hostname = service_name.lower().replace(" ", "-").replace("_", "-")
         domain = f"{hostname}.{self._config.domains.local_suffix}"
 
-        # Step 1: Verify container exists
         status = await self._proxmox.get_container_status(vmid)
         container_status = status.get("status", "unknown")
 
-        # Step 2: Extract current IP from Proxmox
         ip = _extract_ip_from_status(status)
         if not ip:
-            # Try reading raw config
             return {
                 "vmid": vmid,
                 "error": (
@@ -685,12 +964,10 @@ class ProvisioningService:
                 "success": False,
             }
 
-        # Step 3: Register in IPAM (idempotent)
         net = self._config.network
-        import ipaddress as _ipaddress
-        range_start = _ipaddress.IPv4Address(net.ip_range_start)
-        range_end = _ipaddress.IPv4Address(net.ip_range_end)
-        addr = _ipaddress.IPv4Address(ip)
+        range_start = ipaddress.IPv4Address(net.ip_range_start)
+        range_end = ipaddress.IPv4Address(net.ip_range_end)
+        addr = ipaddress.IPv4Address(ip)
         out_of_range = not (range_start <= addr <= range_end)
 
         existing_ip = self._ipam.find_ip_by_vmid(vmid) or self._ipam.find_ip_by_hostname(hostname)
@@ -699,7 +976,6 @@ class ProvisioningService:
         else:
             try:
                 if out_of_range:
-                    # Direct-write reservation bypassing range check
                     from proxmox_mcp_server.services.ipam import IpReservation
                     reservations = self._ipam._get_reservations()
                     reservations.append(IpReservation(ip=ip, hostname=hostname, vmid=vmid))
@@ -724,7 +1000,6 @@ class ProvisioningService:
             "success": True,
         }
 
-        # Step 4: DNS
         if register_dns:
             try:
                 dns_result = await self._pihole.add_dns_record(domain, ip)
@@ -732,7 +1007,6 @@ class ProvisioningService:
             except Exception as exc:
                 result["dns_action"] = f"failed: {exc}"
 
-        # Step 5: Proxy
         if register_proxy:
             try:
                 proxy_result = await self._npm.create_proxy_host(
@@ -746,7 +1020,6 @@ class ProvisioningService:
                 result["proxy_action"] = f"failed: {exc}"
 
         return result
-
 
     # ------------------------------------------------------------------
     # Host administration delegates
@@ -787,15 +1060,11 @@ class ProvisioningService:
         }
 
 
-
 def _extract_ip_from_status(status: dict[str, Any]) -> str | None:
     """Best-effort IP extraction from a Proxmox container status dict."""
-    # Proxmox may return network info in different formats
-    # Try common patterns
     for key in ("ip", "net0"):
         val = status.get(key, "")
         if isinstance(val, str) and "." in val:
-            # Extract IP from strings like "ip=192.168.1.200/24,gw=..."
             for part in val.split(","):
                 if "=" in part:
                     _, v = part.split("=", 1)
