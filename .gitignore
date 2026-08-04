@@ -43,3 +43,6 @@ htmlcov/
 
 # UV
 uv.lock
+
+# Config
+config.yaml
